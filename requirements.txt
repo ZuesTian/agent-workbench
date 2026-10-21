@@ -1,0 +1,5 @@
+tomlkit>=0.13,<1
+PyYAML>=6,<7
+json5>=0.10,<1
+psutil>=5.9,<8
+pywin32>=306; sys_platform == "win32"

@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+build/
+dist/
+*.spec
+*.log
+.test-artifacts/
+node_modules/
+.ruff_cache/
+releases/
+audits/
+AgentWorkbench-*.zip
+packaging/version-info.txt
+preview*.png

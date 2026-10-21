@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest>=8.3,<9
+httpx>=0.28,<1
+ruff>=0.15,<1
+playwright>=1.60,<2
+PyInstaller>=6.17,<7
+Pillow>=12,<13

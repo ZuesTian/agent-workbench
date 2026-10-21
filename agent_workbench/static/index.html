@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Agent 工坊 · 资源与协作</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/collaboration.css" />
+    <link rel="stylesheet" href="/execution.css" />
+    <script src="/theme.js"></script>
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <div id="app">
+      <div class="boot">
+        <div class="brand-symbol">a<span>·</span></div>
+        <h1>Agent 工坊</h1>
+        <p>正在整理本机的能力资源…</p>
+        <div class="loader"></div>
+      </div>
+    </div>
+    <dialog id="composer-dialog" class="composer-drawer" aria-label="装配工作台"></dialog>
+    <dialog id="modal" aria-labelledby="modal-title"></dialog>
+    <div id="toasts" aria-live="polite"></div>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "agent-workbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "format": "prettier --write agent_workbench/static \"tests/*.test.js\"",
+    "format:check": "prettier --check agent_workbench/static \"tests/*.test.js\""
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}
