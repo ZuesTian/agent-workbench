@@ -135,6 +135,107 @@ def test_shutdown_cancels_owned_run(runtime):
         manager.start(request(work))
 
 
+def test_worker_setup_failure_releases_slot_and_allows_next_run(runtime, monkeypatch):
+    manager, work = runtime
+    path = manager._path
+    failed = False
+
+    def fail_once(run_id):
+        nonlocal failed
+        if threading.current_thread() is manager.worker and not failed:
+            failed = True
+            raise ValueError("injected redirected path")
+        return path(run_id)
+
+    monkeypatch.setattr(manager, "_path", fail_once)
+    run = manager.start(request(work))
+    manager.worker.join(timeout=5)
+    assert manager.active is None
+    assert manager.get(run["id"])["status"] == "failed"
+    resumed = manager.start(request(work, "after setup failure"))
+    assert wait_for(manager, resumed["id"])["status"] == "succeeded"
+
+
+def test_final_persistence_failure_does_not_leave_a_running_ghost(runtime, monkeypatch):
+    manager, work = runtime
+    update = manager._update
+
+    def fail_terminal(run_id, **changes):
+        if changes.get("status") in {"succeeded", "failed"}:
+            raise OSError("injected final disk failure")
+        update(run_id, **changes)
+
+    monkeypatch.setattr(manager, "_update", fail_terminal)
+    run = manager.start(request(work))
+    manager.worker.join(timeout=10)
+    assert not manager.worker.is_alive() and manager.active is None
+    assert manager.get(run["id"])["status"] == "interrupted"
+    assert manager.page()["active"] == 0
+    monkeypatch.setattr(manager, "_update", update)
+    resumed = manager.start(request(work, "after persistence failure"))
+    assert wait_for(manager, resumed["id"])["status"] == "succeeded"
+
+
+def test_cancel_signals_process_even_when_record_cannot_be_read(runtime, monkeypatch):
+    manager, work = runtime
+    run = manager.start(request(work, "hang"))
+    wait_for(manager, run["id"], lambda r: r["status"] == "running")
+    read = manager._record
+
+    def unreadable(_run_id):
+        raise ValueError("injected unreadable record")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager, "_record", unreadable)
+        with pytest.raises(ValueError, match="unreadable"):
+            manager.cancel(run["id"])
+        assert manager.cancel_requested.is_set()
+    manager.worker.join(timeout=10)
+    assert manager.active is None and read(run["id"])["status"] == "cancelled"
+
+
+def test_execution_thread_start_failure_releases_slot(runtime, monkeypatch):
+    manager, work = runtime
+
+    def fail_start(_thread):
+        raise RuntimeError("injected thread start failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, "start", fail_start)
+        with pytest.raises(RuntimeError, match="thread start"):
+            manager.start(request(work))
+    assert manager.active is None and manager.worker is None
+    assert manager.list()[0]["status"] == "failed"
+    resumed = manager.start(request(work, "after thread failure"))
+    assert wait_for(manager, resumed["id"])["status"] == "succeeded"
+
+
+def test_finishing_worker_cannot_clear_next_runs_ownership(runtime, monkeypatch):
+    manager, work = runtime
+    execute = manager._run
+    first_finished, release_first = threading.Event(), threading.Event()
+
+    def delay_return(record, prefix):
+        execute(record, prefix)
+        if record["prompt"] == "first":
+            first_finished.set()
+            assert release_first.wait(10)
+
+    monkeypatch.setattr(manager, "_run", delay_return)
+    manager.start(request(work, "first"))
+    first_worker = manager.worker
+    try:
+        assert first_finished.wait(10)
+        second = manager.start(request(work, "hang"))
+        wait_for(manager, second["id"], lambda r: r["status"] == "running")
+    finally:
+        release_first.set()
+        first_worker.join(10)
+    assert manager.active == second["id"]
+    manager.cancel(second["id"])
+    assert wait_for(manager, second["id"])["status"] == "cancelled"
+
+
 def test_deadline_terminates_task_and_preserves_timeout_status(runtime, monkeypatch):
     manager, work = runtime
     real_clock = time.monotonic

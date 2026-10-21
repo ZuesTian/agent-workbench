@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ from .runners import (
     RunnerRegistry, RUNNERS, prepare_command, decode_event, execution_environment,
     cursor_workspace_untrusted, run_mode,
 )
-from .storage import read_json, stamp, write_json
+from .storage import read_json, record_directory, record_roots, stamp, write_json
 from .validation import identifier, text
 
 ACTIVE = {"starting", "running", "cancelling"}
@@ -161,7 +162,7 @@ def _failed_for_workspace_trust(existing):
 class ExecutionManager:
     def __init__(self, data: Path, resolver=codex_command, *, registry=None):
         self.root = data.resolve() / "runs"
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.record_roots = record_roots(self.root)
         self.registry = registry or RunnerRegistry(resolver)
         self.lock = threading.RLock()
         self.active = None
@@ -187,7 +188,8 @@ class ExecutionManager:
         """Remove model-selection copies left behind when a previous process died."""
         for path in self.root.glob("*/zcode-model.json"):
             try:
-                if path.is_symlink() or self.root.resolve() not in path.resolve().parents:
+                directory = self._path(path.parent.name)
+                if path.is_symlink() or path.resolve().parent != directory.resolve():
                     continue
                 path.unlink()
             except OSError:
@@ -211,15 +213,14 @@ class ExecutionManager:
 
     def _path(self, run_id):
         run_id = identifier(run_id, "任务编号")
-        path = self.root / run_id
-        if path.is_symlink() or self.root.resolve() not in path.resolve().parents:
-            raise ValueError("任务记录路径已被重定向")
-        return path
+        return record_directory(self.root, run_id, self.record_roots, "任务")
 
     def _record(self, run_id):
         record = read_json(self._path(run_id) / "run.json", None)
         if not isinstance(record, dict) or record.get("id") != run_id:
             raise LookupError("未找到任务")
+        if record.get("status") in ACTIVE and run_id != self.active:
+            record.update(status="interrupted", error="执行线程已结束，但结束状态未能保存；请检查执行日志。")
         return record
 
     def list(self):
@@ -285,7 +286,7 @@ class ExecutionManager:
         if not cwd.is_absolute() or not cwd.is_dir():
             raise ValueError("工作目录必须是已存在的绝对目录")
         cwd = cwd.resolve()
-        if cwd == self.root.parent.resolve() or self.root.parent.resolve() in cwd.parents:
+        if any(cwd == root.parent or root.parent in cwd.parents for root in self.record_roots):
             raise ValueError("请使用项目目录，不能把执行记录目录作为工作目录")
         trusted_cwd = text(body.get("cursor_trusted_cwd", ""), "Cursor 信任目录", 4096)
         if trusted_cwd:
@@ -315,13 +316,21 @@ class ExecutionManager:
 
     def _spawn(self, record, prefix):
         self.active = record["id"]
-        self.cancel_requested.clear()
-        self.worker = threading.Thread(
-            target=self._execute, args=(record, prefix),
-            name="agent-execution", daemon=False,
-        )
-        self.worker.start()
-        return self.get(record["id"])
+        try:
+            # Validate/read before launching a worker; roll back ownership on failure.
+            snapshot = self.get(record["id"])
+            self.cancel_requested.clear()
+            self.worker = threading.Thread(
+                target=self._execute, args=(record, prefix),
+                name="agent-execution", daemon=False,
+            )
+            self.worker.start()
+        except Exception:
+            self.active = None
+            self.worker = None
+            self._update(record["id"], status="failed", finished_at=stamp(), error="无法启动执行线程。")
+            raise
+        return snapshot
 
     def start(self, body, *, owner=None):
         run_id, request, prefix = self.validate(body)
@@ -361,6 +370,9 @@ class ExecutionManager:
 
     def cancel(self, run_id):
         with self.lock:
+            # A damaged/unreadable record must not prevent stopping its process.
+            if run_id == self.active:
+                self.cancel_requested.set()
             record = self._record(run_id)
             if run_id == self.active and record["status"] in ACTIVE:
                 self.cancel_requested.set()
@@ -375,6 +387,21 @@ class ExecutionManager:
             write_json(self._path(run_id) / "run.json", record)
 
     def _execute(self, record, prefix):
+        try:
+            self._run(record, prefix)
+        except Exception as exc:  # Includes setup, logging and final persistence.
+            logging.exception("Execution worker failed for %s", record["id"])
+            try:
+                self._update(record["id"], status="failed", finished_at=stamp(),
+                             error="执行记录处理失败：" + type(exc).__name__)
+            except (OSError, ValueError, LookupError):
+                logging.exception("Could not persist failed execution %s", record["id"])
+        finally:
+            with self.lock:
+                if self.active == record["id"]:
+                    self.active = None
+
+    def _run(self, record, prefix):
         run_id = record["id"]
         directory = self._path(run_id)
         tree = None
@@ -521,7 +548,8 @@ class ExecutionManager:
                         finished_at=stamp(), error=error, trust_required=needs_trust,
                     )
                 finally:
-                    self.active = None
+                    if self.active == run_id:
+                        self.active = None
 
     def close(self):
         with self.lock:

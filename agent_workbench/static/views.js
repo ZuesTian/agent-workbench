@@ -34,7 +34,7 @@ function ensureShell() {
       <div class="sidebar-footer"><p><span class="local-dot"></span><span id="desktop-state">本地运行</span></p><p>关闭窗口后仍在后台运行</p>
         <div class="window-actions"><button id="minimize-window" data-action="minimize" title="最小化窗口，任务继续运行">${icon('minus')} 最小化</button>
         <button data-action="shutdown" title="关闭窗口和后台服务">${icon('power')} 完全退出</button></div>
-        <span class="version">Agent 工坊 · 0.4.9</span></div>
+        <span class="version">Agent 工坊 · 0.4.10</span></div>
     </aside>
     <aside id="context-column" class="context-column" aria-label="当前页面的对象列表"></aside>
     <div class="workspace"><header class="topbar"><div class="breadcrumb">本机工作空间 <span>/</span> <b id="breadcrumb-name"></b></div>

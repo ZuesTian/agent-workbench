@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .execution import ACTIVE
 from .runners import run_mode
-from .storage import read_json, stamp, write_json
+from .storage import read_json, record_directory, record_roots, stamp, write_json
 from .validation import identifier, text
 
 MAX_MEMBERS = 6
@@ -31,7 +31,7 @@ def _short(value, limit):
 class ConversationManager:
     def __init__(self, data: Path, runs):
         self.root = data.resolve() / "conversations"
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.record_roots = record_roots(self.root)
         self.runs = runs
         self.lock = threading.RLock()
         self.active = None
@@ -58,10 +58,7 @@ class ConversationManager:
                 continue
 
     def _path(self, conversation_id):
-        path = self.root / identifier(conversation_id, "会话编号")
-        if path.is_symlink() or self.root.resolve() not in path.resolve().parents:
-            raise ValueError("会话记录路径已被重定向")
-        return path
+        return record_directory(self.root, identifier(conversation_id, "会话编号"), self.record_roots, "会话")
 
     def _read(self, conversation_id):
         record = read_json(self._path(conversation_id) / "conversation.json", None)
@@ -302,7 +299,10 @@ class ConversationManager:
             record["status"] = "cancelling"
             for message in record["messages"]:
                 if message.get("status") == "running" and message.get("run_id"):
-                    self.runs.cancel(message["run_id"])
+                    try:
+                        self.runs.cancel(message["run_id"])
+                    except (OSError, ValueError, LookupError) as exc:
+                        record["error"] = "取消时无法读取执行记录：" + str(exc)
             self._save(record)
             return self.get(conversation_id)
 
@@ -429,12 +429,17 @@ class ConversationManager:
             outcome = "failed"
             error = str(exc) if isinstance(exc, ValueError) else f"会话执行失败：{type(exc).__name__}"
         finally:
-            with self.runs.lock:
-                active_run = self.runs.active if self.runs.owner == conversation_id else None
-            if active_run:
-                self.runs.cancel(active_run)
-                if self.runs.worker:
-                    self.runs.worker.join(timeout=20)
+            try:
+                with self.runs.lock:
+                    active_run = self.runs.active if self.runs.owner == conversation_id else None
+                if active_run:
+                    try:
+                        self.runs.cancel(active_run)
+                    finally:
+                        if self.runs.worker:
+                            self.runs.worker.join(timeout=20)
+            except Exception as exc:  # Cleanup must never skip the ownership release below.
+                outcome, error = "failed", "清理执行记录失败：" + str(exc)
             with self.lock:
                 try:
                     record = self._read(conversation_id)

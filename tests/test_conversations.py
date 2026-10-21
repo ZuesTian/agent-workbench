@@ -378,3 +378,33 @@ def test_cancel_stops_remaining_members_and_releases_slot(tmp_path):
     assert final["status"] == "cancelled"
     assert all(m["status"] == "cancelled" for m in final["messages"] if m["role"] == "assistant")
     assert len(runs.started) == 1 and runs.owner is None and manager.active is None
+
+
+@pytest.mark.parametrize("cleanup_error", [ValueError, RuntimeError])
+def test_cleanup_record_error_releases_conversation_and_allows_resend(tmp_path, monkeypatch, cleanup_error):
+    runs = FakeRuns()
+    manager = make_manager(tmp_path, runs)
+    conv = create(manager, tmp_path)
+    original_start = runs.start
+
+    def fail_start(body, owner=None):
+        runs.active = body["request_id"]
+        raise ValueError("injected redirected record")
+
+    def fail_cancel(_run_id):
+        runs.active = None
+        raise cleanup_error("injected unreadable cleanup record")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(runs, "start", fail_start)
+        patch.setattr(runs, "cancel", fail_cancel)
+        manager.message({"id": conv["id"], "text": "first turn fails before CLI"})
+        manager.worker.join(timeout=5)
+    failed = manager.get(conv["id"])
+    assert failed["status"] == "failed" and not failed["running"]
+    assert all(m["status"] == "error" for m in failed["messages"] if m["role"] == "assistant")
+    assert runs.owner is None and manager.active is None
+    assert runs.start == original_start
+    manager.message({"id": conv["id"], "text": "resend after failed cleanup"})
+    manager.worker.join(timeout=5)
+    assert manager.get(conv["id"])["status"] == "succeeded"

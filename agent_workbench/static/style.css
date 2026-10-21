@@ -1997,10 +1997,10 @@ dialog .busy-overlay {
 
 @media (min-width: 1750px) {
   .app-shell {
-    grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-columns: 230px 280px minmax(0, 1fr);
   }
   .app-shell.with-composer {
-    grid-template-columns: 230px minmax(0, 1fr) 354px;
+    grid-template-columns: 230px 280px minmax(0, 1fr) 354px;
   }
   .with-composer .resource-grid,
   .with-composer .agent-grid {

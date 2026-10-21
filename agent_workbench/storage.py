@@ -20,6 +20,33 @@ def read_json(path: Path, default):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def record_roots(root: Path) -> frozenset[Path]:
+    """Pin the read and write locations of a merged Windows AppData directory.
+
+    An existing directory can resolve to real AppData, while new children resolve
+    to LocalCache. An exclusive empty probe observes the actual write location.
+    Keep the logical directory for enumeration so existing records stay visible.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    read_root = root.resolve(strict=True)
+    probe = root / (".awb-location-" + uuid.uuid4().hex + ".tmp")
+    created = False
+    try:
+        with probe.open("x", encoding="utf-8"):
+            created = True
+        return frozenset((read_root, probe.resolve(strict=True).parent))
+    finally:
+        if created:
+            probe.unlink(missing_ok=True)
+
+
+def record_directory(root: Path, name: str, roots: frozenset[Path], label: str) -> Path:
+    path = root / name
+    if path.is_symlink() or path.is_junction() or path.resolve().parent not in roots:
+        raise ValueError(label + "记录路径已被重定向")
+    return path
+
+
 def write_json(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")

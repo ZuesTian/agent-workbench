@@ -296,12 +296,23 @@ def exercise(client, base, token, root, agents):
 
             expect(page.locator("#toasts .toast")).to_have_count(0, timeout=16000)
             widths = []
-            for width in (1440, 1024, 390):
+            for width in (1440, 1749, 1750, 1920, 2292, 2560, 1024, 390):
                 page.set_viewport_size({"width": width, "height": 1000})
                 assert not page.evaluate(
                     "document.documentElement.scrollWidth > innerWidth"
                 )
                 expect(page.locator("[data-chat-send]")).to_be_visible()
+                if width >= 1749:
+                    main = page.locator("#main-content").bounding_box()
+                    context = page.locator("#context-column").bounding_box()
+                    assert main["y"] < 160 and main["width"] >= min(width - 600, 1400), main
+                    assert main["x"] >= context["x"] + context["width"], (main, context)
+                    page.locator("#composer-trigger").click()
+                    expect(page.locator(".app-shell")).to_have_class("app-shell with-composer")
+                    main = page.locator("#main-content").bounding_box()
+                    assert main["y"] < 160 and main["width"] >= min(width - 1000, 1400), main
+                    page.screenshot(path=str(root / f"chat-composer-{width}.png"))
+                    page.locator("#composer-trigger").click()
                 widths.append(width)
                 page.screenshot(path=str(root / f"chat-{width}.png"), full_page=True)
             assert errors == [], errors
@@ -315,6 +326,7 @@ def exercise(client, base, token, root, agents):
                 "ime_enter": "passed",
                 "draft_switch_reload_and_success_clear": "passed",
                 "viewport_widths": widths,
+                "wide_chat_and_composer_stay_in_first_row": "passed",
                 "browser_errors": errors,
             }
         finally:

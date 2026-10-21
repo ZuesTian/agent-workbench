@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .execution import ACTIVE, TRUST_PROMPT, paginate, record_text
 from .runners import run_mode
-from .storage import read_json, write_json, stamp
+from .storage import read_json, record_directory, record_roots, write_json, stamp
 from .teams import blueprint
 from .validation import identifier, text
 
@@ -113,7 +113,7 @@ def step_prompt(workflow, step, previous):
 class WorkflowManager:
     def __init__(self, data: Path, runs):
         self.root = data.resolve() / "workflows"
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.record_roots = record_roots(self.root)
         self.runs = runs
         self.lock = threading.RLock()
         self.active = None
@@ -134,10 +134,7 @@ class WorkflowManager:
                 pass
 
     def _path(self, workflow_id):
-        path = self.root / identifier(workflow_id, "调度编号")
-        if path.is_symlink() or self.root.resolve() not in path.resolve().parents:
-            raise ValueError("调度记录路径已被重定向")
-        return path
+        return record_directory(self.root, identifier(workflow_id, "调度编号"), self.record_roots, "调度")
 
     def _read(self, workflow_id):
         record = read_json(self._path(workflow_id) / "workflow.json", None)
