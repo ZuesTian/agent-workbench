@@ -133,7 +133,7 @@ for base in (root / "agent_workbench", root / "tests"):
         if path.is_file() and "__pycache__" not in path.parts:
             manifest_files.append(path)
 for name in (
-    "launcher.py", "build_windows.py", "README.md", "EXECUTION.md", "UI-REVIEW.md",
+    "launcher.py", "build_windows.py", "README.md", "EXECUTION.md",
     "requirements.txt", "requirements-dev.txt", "package.json", "package-lock.json",
     "pytest.ini", ".gitignore", ".prettierrc.json", ".github/workflows/ci.yml",
 ):
