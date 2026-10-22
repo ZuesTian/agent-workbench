@@ -442,3 +442,65 @@ def test_restart_removes_leftover_zcode_model_file(tmp_path):
     assert manager.get(run_id)["status"] == "interrupted"
     assert "VERY_SECRET" not in manager.get(run_id)["log"]
     manager.close()
+
+
+def test_restart_skips_invalid_record_directory_and_cleans_valid_override(tmp_path):
+    data = tmp_path / "data"
+    invalid = data / "runs" / "not-a-run" / "zcode-model.json"
+    valid = data / "runs" / ("a" * 32) / "zcode-model.json"
+    for path in (invalid, valid):
+        path.parent.mkdir(parents=True)
+        path.write_text("fixture", encoding="utf-8")
+    manager = ExecutionManager(data, lambda: None)
+    try:
+        assert invalid.read_text(encoding="utf-8") == "fixture"
+        assert not valid.exists()
+        assert manager.active is None
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("window", ["cancel-wakeup", "after-process-wait"])
+def test_cancel_after_process_exit_preserves_success_and_allows_next_run(runtime, monkeypatch, window):
+    manager, work = runtime
+    exited, finish = threading.Event(), threading.Event()
+    original_tree = execution.ProcessTree
+    original_cancel_wait = manager.cancel_requested.wait
+    captured = {}
+
+    def hold_after_exit(process_wait):
+        assert process_wait(timeout=5) == 0
+        exited.set()
+        assert finish.wait(5), "The test must release the completed process"
+        return 0
+
+    def create_tree(*args, **kwargs):
+        tree = original_tree(*args, **kwargs)
+        captured["tree"] = tree
+        if window == "after-process-wait":
+            process_wait = tree.process.wait
+            tree.process.wait = lambda timeout=None: hold_after_exit(process_wait)
+        return tree
+
+    def cancel_wait(timeout=None):
+        hold_after_exit(captured["tree"].process.wait)
+        return original_cancel_wait(0)
+
+    monkeypatch.setattr(execution, "ProcessTree", create_tree)
+    if window == "cancel-wakeup":
+        monkeypatch.setattr(manager.cancel_requested, "wait", cancel_wait)
+    try:
+        run = manager.start(request(work, "completed-before-cancel"))
+        assert exited.wait(6), "The fixture must exit before cancellation"
+        assert captured["tree"].process.poll() == 0
+        manager.cancel(run["id"])
+    finally:
+        finish.set()
+    result = wait_for(manager, run["id"])
+    assert result["status"] == "succeeded" and result["exit_code"] == 0
+    assert result["result"] == "真实进程输出：completed-before-cancel"
+    assert manager.active is None
+    monkeypatch.setattr(execution, "ProcessTree", original_tree)
+    monkeypatch.setattr(manager.cancel_requested, "wait", original_cancel_wait)
+    following = manager.start(request(work, "next-run"))
+    assert wait_for(manager, following["id"])["status"] == "succeeded"

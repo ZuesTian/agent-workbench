@@ -295,6 +295,37 @@ def exercise(client, base, token, root, agents):
             expect(page.locator("#chat-input")).to_be_enabled()
 
             expect(page.locator("#toasts .toast")).to_have_count(0, timeout=16000)
+            drawers = []
+            for width in (1101, 1150, 1180):
+                page.set_viewport_size({"width": width, "height": 1000})
+                for composer_open in (False, True):
+                    if composer_open:
+                        page.locator("#composer-trigger").click()
+                        expect(page.locator(".app-shell")).to_have_class("app-shell with-composer")
+                    assert page.locator("#main-content").bounding_box()["y"] < 160
+                    toggle = page.locator("#context-toggle")
+                    expect(toggle).to_have_attribute("aria-expanded", "false")
+                    toggle.click()
+                    column = page.locator("#context-column")
+                    expect(column).to_be_visible()
+                    expect(toggle).to_have_attribute("aria-expanded", "true")
+                    box = column.bounding_box()
+                    assert box["width"] >= 280 and box["height"] > 800, box
+                    assert column.evaluate("el => el.contains(document.activeElement)")
+                    expect(page.locator("#context-backdrop")).to_be_visible()
+                    page.screenshot(path=str(root / f"context-{width}-composer-{int(composer_open)}.png"))
+                    page.keyboard.press("Escape")
+                    expect(toggle).to_have_attribute("aria-expanded", "false")
+                    expect(toggle).to_be_focused()
+                    expect(page.locator("#context-backdrop")).to_be_hidden()
+                    expect(column).to_be_hidden()
+                    toggle.click()
+                    page.locator("#context-backdrop").click(position={"x": width - 20, "y": 500})
+                    expect(page.locator("#context-backdrop")).to_be_hidden()
+                    expect(column).to_be_hidden()
+                    drawers.append({"width": width, "composer": composer_open})
+                    if composer_open:
+                        page.locator("#composer-trigger").click()
             widths = []
             for width in (1440, 1749, 1750, 1920, 2292, 2560, 1024, 390):
                 page.set_viewport_size({"width": width, "height": 1000})
@@ -327,6 +358,7 @@ def exercise(client, base, token, root, agents):
                 "draft_switch_reload_and_success_clear": "passed",
                 "viewport_widths": widths,
                 "wide_chat_and_composer_stay_in_first_row": "passed",
+                "context_drawer_keyboard_pointer_and_focus": drawers,
                 "browser_errors": errors,
             }
         finally:

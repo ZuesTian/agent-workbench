@@ -14,9 +14,15 @@ from agent_workbench import __version__
 
 root = Path(__file__).resolve().parent
 
-readme = (root / "README.md").read_text(encoding="utf-8").splitlines()[0]
+readme = (root / "README.md").read_text(encoding="utf-8")
 views = (root / "agent_workbench" / "static" / "views.js").read_text(encoding="utf-8")
-if __version__ not in readme or f"Agent 工坊 · {__version__}" not in views:
+execution_doc = (root / "EXECUTION.md").read_text(encoding="utf-8")
+if (
+    __version__ not in readme.splitlines()[0]
+    or f"Agent 工坊 · {__version__}" not in views
+    or f"`AgentWorkbench-{__version__}-Windows.zip`" not in readme
+    or f"Agent 工坊 {__version__} 支持" not in execution_doc
+):
     raise SystemExit(f"版本号不一致：源码 {__version__}，README 或界面未同步")
 
 # PyInstaller cleans these directories; never allow a redirected output outside the project.

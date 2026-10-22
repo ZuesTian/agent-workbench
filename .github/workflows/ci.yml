@@ -29,3 +29,29 @@ jobs:
       - run: npm test
       - run: python -m ruff check agent_workbench tests launcher.py build_windows.py
       - run: npm run format:check
+      - name: Isolated browser checks
+        run: |
+          python tests/execution_browser_controls.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/scheduling_browser_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/conversations_browser_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/reliability_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: python build_windows.py
+      - name: Packaged browser checks
+        run: |
+          python tests/conversations_browser_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/reliability_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-verification
+          path: |
+            .test-artifacts/**/*.json
+            .test-artifacts/**/*.png
+            .test-artifacts/**/*.log
+            releases/*/verification/

@@ -88,6 +88,60 @@ def test_json5_comments_and_trailing_commas_remain_supported(tmp_path):
         adapters.read_document(path, "json")
 
 
+def test_deep_settings_preserve_original_and_keep_catalog_available(tmp_path):
+    data = tmp_path / "data"
+    original = '{"roots":[],"agents":[],"extra":' + "[" * 60000 + "0" + "]" * 60000 + "}"
+    settings = write(data / "settings.json", original)
+    catalog = Catalog(tmp_path / "home", tmp_path / "roaming", data, system_scan=False)
+    try:
+        assert "settings.json" in catalog.settings_error
+        assert catalog.scan()["counts"]["skills"] == 0
+        assert settings.read_text(encoding="utf-8") == original
+    finally:
+        catalog.close()
+
+
+def test_bad_skill_does_not_hide_healthy_items_and_recovers_after_edit(tmp_path):
+    catalog = fixture_catalog(tmp_path)
+    bad = write(catalog.home / ".claude/skills/bad/SKILL.md",
+                "---\nname: bad\npayload: " + "[" * 30000 + "]" * 30000 + "\n---\nbody")
+    original = bad.read_bytes()
+    try:
+        for _ in range(2):
+            view = catalog.scan()
+            assert {item["name"] for item in view["skills"]} == {"lab"}
+            assert any(str(bad) in issue and "RecursionError" in issue for issue in view["issues"])
+            assert not catalog.scan_status()["error"]
+        assert bad.read_bytes() == original
+        write(bad, "---\nname: repaired\ndescription: readable\n---\nbody")
+        repaired = catalog.scan()
+        assert {item["name"] for item in repaired["skills"]} == {"lab", "repaired"}
+        assert not any(str(bad) in issue for issue in repaired["issues"])
+    finally:
+        catalog.close()
+
+
+def test_unreadable_role_directory_does_not_abort_skill_scan(tmp_path, monkeypatch):
+    catalog = fixture_catalog(tmp_path)
+    denied = catalog.home / ".claude/agents"
+    denied.mkdir()
+    original_iterdir = Path.iterdir
+
+    def iterdir(path):
+        if path == denied:
+            raise PermissionError("fixture denied")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    try:
+        view = catalog.scan()
+        assert any(item["name"] == "lab" for item in view["skills"])
+        assert any(str(denied) in issue for issue in view["issues"])
+        assert not catalog.scan_status()["error"]
+    finally:
+        catalog.close()
+
+
 def test_startup_cache_is_public_only_and_not_authoritative(tmp_path):
     c = fixture_catalog(tmp_path)
     old = c.scan()

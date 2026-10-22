@@ -105,7 +105,7 @@ class Catalog:
                     for k in ("id", "name", "config")
                 ):
                     raise ValueError()
-        except (ValueError, TypeError, OSError):
+        except (ValueError, TypeError, OSError, RecursionError):
             self.settings_error = (
                 "settings.json 无法读取；已保留原文件，修复后重新启动可恢复自定义目录。"
             )
@@ -393,25 +393,29 @@ class Catalog:
                     if p == agent.config:
                         public["error"] = msg
             for root in agent.role_roots:
-                if root.is_dir():
-                    for p in sorted(root.iterdir()):
+                try:
+                    role_files = sorted(root.iterdir()) if root.is_dir() else []
+                except OSError as exc:
+                    issues.append(f"无法访问子 Agent 目录：{root}（{type(exc).__name__}）")
+                    continue
+                for p in role_files:
+                    try:
                         if p.suffix not in (".md", ".toml") or not p.is_file():
                             continue
-                        try:
-                            (text, meta), _ = self._files.read(p, "role", skill_content)
-                            if p.suffix == ".toml":
-                                meta, _ = self._files.document(p, "codex")
-                            i = uid("role", p)
-                            self.roles[i] = {
-                                "id": i,
-                                "name": str(meta.get("name", p.stem)),
-                                "description": str(meta.get("description", "")),
-                                "agent": agent.id,
-                                "path": str(p),
-                                "_text": text,
-                            }
-                        except Exception:
-                            issues.append(f"无法读取子 Agent：{p.name}")
+                        (text, meta), _ = self._files.read(p, "role", skill_content)
+                        if p.suffix == ".toml":
+                            meta, _ = self._files.document(p, "codex")
+                        i = uid("role", p)
+                        self.roles[i] = {
+                            "id": i,
+                            "name": str(meta.get("name", p.stem)),
+                            "description": str(meta.get("description", "")),
+                            "agent": agent.id,
+                            "path": str(p),
+                            "_text": text,
+                        }
+                    except Exception as exc:
+                        issues.append(f"无法读取子 Agent：{p}（{type(exc).__name__}）")
         for root in self.settings["roots"]:
             roots.append((Path(root), "custom", "自定义目录"))
         roots.append((self.data / "library/skills", "library", "我的资源库"))
@@ -447,8 +451,8 @@ class Catalog:
                         "_path": p.parent,
                         "_definition_hash": source_hash,
                     }
-                except (OSError, UnicodeError):
-                    issues.append(f"无法读取 Skill：{p}")
+                except Exception as exc:
+                    issues.append(f"无法读取 Skill：{p}（{type(exc).__name__}）；已跳过，未覆盖原文件。")
         library_path = self.data / "library/mcps.json"
         try:
             content = library_path.read_bytes() if library_path.exists() else b"[]"

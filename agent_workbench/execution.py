@@ -192,7 +192,7 @@ class ExecutionManager:
                 if path.is_symlink() or path.resolve().parent != directory.resolve():
                     continue
                 path.unlink()
-            except OSError:
+            except (OSError, ValueError):
                 continue
 
     def runners(self):
@@ -498,12 +498,16 @@ class ExecutionManager:
                 deadline = time.monotonic() + record["timeout_minutes"] * 60
                 while tree.process.poll() is None:
                     if self.cancel_requested.wait(0.15):
-                        outcome = "cancelled"
-                        tree.stop()
+                        # A cancellation can arrive after the process exited while
+                        # this wait was sleeping. Preserve that completed result.
+                        if tree.process.poll() is None:
+                            outcome = "cancelled"
+                            tree.stop()
                         break
                     if time.monotonic() >= deadline:
-                        outcome, error = "timed_out", "任务超过设定时间，已终止执行。"
-                        tree.stop()
+                        if tree.process.poll() is None:
+                            outcome, error = "timed_out", "任务超过设定时间，已终止执行。"
+                            tree.stop()
                         break
                 returncode = tree.process.wait(timeout=10)
                 tree.close()
@@ -511,9 +515,7 @@ class ExecutionManager:
                 for reader in readers:
                     reader.join(timeout=5)
                 if outcome not in {"cancelled", "timed_out"}:
-                    if self.cancel_requested.is_set():
-                        outcome = "cancelled"
-                    elif oversized.is_set():
+                    if oversized.is_set():
                         error = "单条输出超过 8 MB，已停止解析。"
                     elif returncode == 0 and completed.is_set() and not failed.is_set():
                         outcome = "succeeded"

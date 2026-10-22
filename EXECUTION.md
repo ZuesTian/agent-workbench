@@ -1,6 +1,6 @@
 # 执行任务与自动调度
 
-Agent 工坊 0.4.9 支持真实执行、自动调度、多 Agent 会话与 Windows 托盘，数据仍保存在 `%LOCALAPPDATA%\AgentWorkbench`。原来的资源发现、装配、备份和协作方案继续使用。
+Agent 工坊 0.4.11 支持真实执行、自动调度、多 Agent 会话与 Windows 托盘，数据仍保存在 `%LOCALAPPDATA%\AgentWorkbench`。原来的资源发现、装配、备份和协作方案继续使用。
 
 ## 单个任务
 
@@ -81,9 +81,11 @@ python tests/reliability_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
 ```powershell
 python tests/execution_live_smoke.py
 python tests/scheduling_browser_smoke.py --live
-python tests/execution_packaged_smoke.py releases/0.4.1
+python tests/execution_packaged_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
 ```
 
-最后一项要求先启动对应发布目录中的主版程序，会运行三个客户端的交接测试并保留服务运行。
+最后一项要求先启动指定 EXE，运行实例须与当前源码版本一致；脚本会运行三个客户端的交接测试并保留服务运行，证据写入当前版本的 `releases/<版本>/verification/packaged-live/`。它使用真实账号，不加入自动 CI。
+
+Windows CI 显式运行 Python、JavaScript、固定版本 Ruff、格式检查，以及执行页、协作、会话和生命周期四类隔离浏览器 smoke；构建后再运行打包会话与生命周期 smoke。浏览器脚本不由 pytest 自动收集。检查结果与截图作为 CI 附件保存。仓库配置了远程并实际触发后，才能据此报告远程 CI 通过；本地发布仍以各次保存的执行记录为准。
 
 执行适配依据本机 CLI 帮助、已安装客户端的协议实现、Harness headless 文档及 [OpenAI 非交互模式文档](https://learn.chatgpt.com/docs/non-interactive-mode)。客户端升级后若协议变化，应重新运行集成验证。既有 MCP 的全部连通性不在本次验证范围内。

@@ -1,5 +1,6 @@
 """Opt-in release smoke against the running main app and saved local accounts."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -12,15 +13,21 @@ import httpx
 import psutil
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from agent_workbench import __version__
+
+PROJECT = Path(__file__).resolve().parents[1]
 
 def main():
-    release = Path(sys.argv[1]).resolve()
-    executable = release / "dist/AgentWorkbench/AgentWorkbench.exe"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--exe", type=Path, default=PROJECT / "dist/AgentWorkbench/AgentWorkbench.exe")
+    args = parser.parse_args()
+    executable = args.exe.resolve()
     runtime = Path(os.environ["LOCALAPPDATA"]) / "AgentWorkbench/runtime.json"
     info = json.loads(runtime.read_text(encoding="utf-8"))
     process = psutil.Process(info["pid"])
     assert Path(process.exe()).resolve() == executable, "Unexpected running package"
-    root = release / "verification"
+    root = PROJECT / "releases" / __version__ / "verification" / "packaged-live"
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     summary = {"exe": str(executable), "pid": process.pid}
@@ -31,12 +38,12 @@ def main():
         client.post("/api/auth", json={"token": info["token"]}).raise_for_status()
         try:
             health = client.get("/api/health").json()
-            assert health["version"] == "0.4.1", health
+            assert health["version"] == __version__, health
             summary["version"] = health["version"]
             for name in ("execution.js", "workflows.js", "execution.css", "views.js"):
                 response = client.get("/" + name)
                 response.raise_for_status()
-                expected = release / "agent_workbench/static" / name
+                expected = PROJECT / "agent_workbench/static" / name
                 assert hashlib.sha256(response.content).digest() == hashlib.sha256(expected.read_bytes()).digest()
             summary["assets_match_source"] = True
             summary["runners"] = {r["id"]: r["available"] for r in client.get("/api/runners").json()}
@@ -57,7 +64,7 @@ def main():
                 "permission": "read-only", "timeout_minutes": 2,
                 "team": {
                     "format": "agent-workbench-team", "version": 1,
-                    "name": "0.4.1 打包验收", "layout": "horizontal",
+                    "name": f"{__version__} 打包验收", "layout": "horizontal",
                     "goal": (
                         "这是三客户端交接验收。禁止调用工具、读写文件、创建子 Agent。"
                         "负责人先简短分派；DeepSeek 回复 DSH_PACKAGED_OK；"

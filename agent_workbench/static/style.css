@@ -3134,6 +3134,8 @@ input[type='number'] {
   .app-shell.with-composer {
     grid-template-columns: 196px minmax(0, 1fr) 320px;
   }
+}
+@media (min-width: 1181px) and (max-width: 1500px) {
   .app-shell.with-composer .context-column {
     display: none;
   }
