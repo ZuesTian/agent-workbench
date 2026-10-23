@@ -5,6 +5,7 @@ export const names = {
   teams: '协作编排',
   execution: '执行任务',
   workflows: '自动调度',
+  tasks: '任务库',
   skills: 'Skill 库',
   mcps: 'MCP 库',
   roles: '子 Agent',

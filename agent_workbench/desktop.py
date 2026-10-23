@@ -17,6 +17,8 @@ WINDOW_TITLE = "Agent 工坊 · 资源与协作"
 OPEN = 1001
 MINIMIZE = 1002
 EXIT = 1003
+WATCH_TIMER = 2
+WATCH_INTERVAL_MS = 2000
 
 
 class DesktopController:
@@ -38,12 +40,18 @@ class DesktopController:
         self.icon = None
         self.owns_icon = False
         self.callback_message = win32con.WM_APP + 41
+        self.window_open = False
         self.restart_message = win32gui.RegisterWindowMessage("TaskbarCreated")
         self.class_name = f"AgentWorkbench.Tray.{os.getpid()}"
         self.user = ctypes.WinDLL("user32", use_last_error=True)
         self.user.GetWindowThreadProcessId.argtypes = [
             wintypes.HWND, ctypes.POINTER(wintypes.DWORD)
         ]
+        # pywin32 does not wrap SetTimer; the tray thread needs it to watch windows.
+        self.user.SetTimer.argtypes = [
+            wintypes.HWND, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p
+        ]
+        self.user.SetTimer.restype = ctypes.c_uint
         # Old browser windows may still contain an expired session after a crash.
         # Opening a new service must obtain a fresh authenticated window first.
         self.previous_windows = set(self._windows(include_previous=True))
@@ -120,6 +128,8 @@ class DesktopController:
             else:
                 self.icon = self.gui.LoadIcon(0, self.con.IDI_APPLICATION)
             self._add_icon()
+            if not self.user.SetTimer(self.hwnd, WATCH_TIMER, WATCH_INTERVAL_MS, None):
+                logging.warning("Unable to start the window watcher timer")
             self.ready.set()
             self.gui.PumpMessages()
         except Exception:
@@ -186,6 +196,9 @@ class DesktopController:
             if message == self.con.WM_COMMAND:
                 self._command(wparam & 0xFFFF)
                 return 0
+            if message == self.con.WM_TIMER and wparam == WATCH_TIMER:
+                self._watch_windows()
+                return 0
             if message == self.con.WM_CLOSE:
                 self.gui.DestroyWindow(hwnd)
                 return 0
@@ -244,6 +257,45 @@ class DesktopController:
                 self.gui.ShowWindow(hwnd, self.con.SW_MINIMIZE)
                 self.last_window = hwnd
         return {"minimized": bool(windows)}
+
+    def _watch_windows(self):
+        """Notice when the last Workbench window closes; the service stays up.
+
+        Polling is used instead of a page-unload request because a reload must
+        stay silent and a killed window still deserves the notice.
+        """
+        if not self.available or self.closing():
+            self.window_open = False
+            return
+        if self._windows():
+            self.window_open = True
+            return
+        if self.window_open:
+            self.window_open = False
+            self._notify_background()
+
+    def _notify_background(self):
+        if self.closing() or self._windows():
+            return
+        if self.busy():
+            title, text = (
+                "工坊仍在后台运行，任务继续",
+                "运行中的任务不会中断；右键点击托盘图标可选择「完全退出」（会取消任务）。",
+            )
+        else:
+            title, text = (
+                "工坊仍在后台运行",
+                "右键点击托盘图标可选择「完全退出」。",
+            )
+        try:
+            self.gui.Shell_NotifyIcon(
+                self.gui.NIM_MODIFY,
+                (self.hwnd, 1, self.gui.NIF_INFO, self.callback_message, self.icon,
+                 "Agent 工坊 · 后台运行", text, 10000, title,
+                 self.gui.NIIF_INFO | self.gui.NIIF_NOSOUND),
+            )
+        except self.gui.error:
+            logging.exception("Unable to show the background notice")
 
     def stop(self, close_windows=False):
         if close_windows:

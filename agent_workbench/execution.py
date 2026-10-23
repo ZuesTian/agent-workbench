@@ -475,6 +475,20 @@ class ExecutionManager:
         try:
             environment = execution_environment()
             command = prepare_command(prefix, record, directory, environment)
+            # Record launch settings without environment values or credentials.
+            runtime = {
+                "client": record["agent"], "entrypoints": [],
+                "requested_model": record["model"] or None,
+                "model_source": "explicit" if record["model"] else "client_default",
+                "cwd": record["cwd"], "permission": record["sandbox"],
+            }
+            for value in prefix:
+                entry = Path(value)
+                if entry.is_file():
+                    info = entry.stat()
+                    runtime["entrypoints"].append({"path": str(entry.resolve()), "bytes": info.st_size,
+                                                    "modified_ns": str(info.st_mtime_ns)})
+            self._update(run_id, runtime=runtime)
             log(f"启动 {agent_name}；工作目录：{record['cwd']}；权限：{record['sandbox']}", "工坊")
             if record.get("cursor_trusted_cwd"):
                 log("已收到此工作目录的信任确认；Cursor 将保存目录信任，工具操作仍按客户端权限处理。", "工坊")

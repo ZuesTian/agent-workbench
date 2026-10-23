@@ -26,10 +26,10 @@ import {
   renderContext,
   syncContextChrome,
 } from '/views.js';
-import { openExecution } from '/execution.js';
+import { openExecution, selectExecution } from '/execution.js';
 import { openWorkflow } from '/workflows.js';
 import { initTeamEvents } from '/team-controller.js';
-import { restoreTeamDraft, preserveTeamDraftBeforeClose, setTeam, editor } from '/team-model.js';
+import { restoreTeamDraft, setTeam, editor } from '/team-model.js';
 import {
   details,
   saveDialog,
@@ -48,6 +48,19 @@ import {
   refreshConversations,
   selectConversation,
 } from '/conversations.js';
+
+document.addEventListener('awb:open-task', ({ detail }) => {
+  if (detail.kind === 'run') {
+    selectExecution(detail.id);
+    switchTab('execution');
+  } else if (detail.kind === 'workflow') {
+    switchTab('workflows');
+    openWorkflow(detail.id);
+  } else {
+    switchTab('chat');
+    selectConversation(detail.id);
+  }
+});
 
 let scanTimer = null;
 let scanNotice = false;
@@ -406,24 +419,6 @@ const actions = {
   'import-profile': () => {
     byId('profile-file').value = '';
     byId('profile-file').click();
-  },
-  minimize: async () => {
-    const result = await api('desktop/minimize', {});
-    if (!result.minimized) toast(result.message || '当前没有可最小化的工坊窗口');
-  },
-  shutdown: () =>
-    showModal(
-      '完全退出 Agent 工坊',
-      '<p class="subheading">将关闭工坊窗口、托盘图标和后台服务；正在运行的任务会被取消。若希望任务继续，请选择“最小化”。</p>',
-      '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-shutdown">完全退出</button>',
-    ),
-  'confirm-shutdown': async () => {
-    if (!preserveTeamDraftBeforeClose())
-      throw Error('无法保存本机草稿，请先保存或导出协作方案，再完全退出。');
-    await api('shutdown', {});
-    modal.close();
-    byId('app').innerHTML =
-      '<div class="boot"><div class="brand-symbol">a<span>·</span></div><h2>工坊已完全退出</h2><p>后台服务正在结束。从桌面入口可重新打开。</p></div>';
   },
 };
 async function saveCurrent(asNew) {

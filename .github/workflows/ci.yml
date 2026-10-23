@@ -35,6 +35,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/scheduling_browser_smoke.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/recovery_browser_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/acceptance_browser_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:AWB_REQUIRE_INTERACTIVE = '1'
           python tests/conversations_browser_smoke.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/reliability_smoke.py
@@ -42,6 +47,10 @@ jobs:
       - run: python build_windows.py
       - name: Packaged browser checks
         run: |
+          python tests/recovery_browser_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/acceptance_browser_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/conversations_browser_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/reliability_smoke.py --exe dist/AgentWorkbench/AgentWorkbench.exe

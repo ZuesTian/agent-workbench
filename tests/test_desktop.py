@@ -46,6 +46,94 @@ def controller():
     return desktop, calls
 
 
+def notice_controller():
+    """Extend the in-memory controller with the tray notice calls."""
+    desktop, calls = controller()
+    desktop.gui.NIM_MODIFY = 1
+    desktop.gui.NIF_INFO = 16
+    desktop.gui.NIIF_INFO = 1
+    desktop.gui.NIIF_NOSOUND = 16
+    desktop.gui.Shell_NotifyIcon = lambda message, nid: calls.append(("notify", message, nid))
+    desktop.icon = None
+    desktop.callback_message = 100
+    desktop.restart_message = 999
+    desktop.window_open = False
+    desktop.con.WM_COMMAND = 273
+    desktop.con.WM_TIMER = 275
+    return desktop, calls
+
+
+def notices(calls):
+    return [call for call in calls if call[0] == "notify"]
+
+
+def test_watcher_notices_the_last_window_without_repeating():
+    desktop, calls = notice_controller()
+    desktop.window_open = True
+    desktop._windows = lambda: []
+    desktop._message(desktop.hwnd, desktop.con.WM_TIMER, 2, 0)
+    assert len(notices(calls)) == 1
+    desktop._message(desktop.hwnd, desktop.con.WM_TIMER, 2, 0)
+    assert len(notices(calls)) == 1
+
+
+def test_watcher_stays_quiet_for_reloads_and_before_the_first_window():
+    desktop, calls = notice_controller()
+    desktop.window_open = True
+    desktop._watch_windows()  # the window is still open, as during a reload
+    assert notices(calls) == []
+    assert desktop.window_open is True
+
+    desktop, calls = notice_controller()
+    desktop._windows = lambda: []
+    desktop._watch_windows()  # no window has opened yet
+    assert notices(calls) == []
+
+
+def test_watcher_skips_full_exit_and_unavailable_tray():
+    desktop, calls = notice_controller()
+    desktop.window_open = True
+    desktop._windows = lambda: []
+    desktop.closing = lambda: True
+    desktop._watch_windows()
+    assert notices(calls) == []
+    assert desktop.window_open is False
+
+    desktop, calls = notice_controller()
+    desktop.window_open = True
+    desktop._windows = lambda: []
+    desktop.available = False
+    desktop._watch_windows()
+    assert notices(calls) == []
+
+
+def test_notice_appears_once_the_window_is_really_gone():
+    desktop, calls = notice_controller()
+    desktop._windows = lambda: []
+    desktop._notify_background()
+    ((_, _, nid),) = notices(calls)
+    assert nid[2] == 16
+    assert "仍在后台运行" in nid[8]
+    assert "完全退出" in nid[6]
+    assert nid[7] == 10000
+
+
+def test_notice_mentions_running_tasks_and_skips_full_exit():
+    desktop, calls = notice_controller()
+    desktop._windows = lambda: []
+    desktop.busy = lambda: True
+    desktop._notify_background()
+    ((_, _, nid),) = notices(calls)
+    assert "任务继续" in nid[8]
+    assert "取消任务" in nid[6]
+
+    desktop, calls = notice_controller()
+    desktop._windows = lambda: []
+    desktop.closing = lambda: True
+    desktop._notify_background()
+    assert notices(calls) == []
+
+
 def test_minimize_preserves_service_and_restore_reuses_window():
     desktop, calls = controller()
     assert desktop.minimize() == {"minimized": True}

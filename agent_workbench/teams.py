@@ -7,6 +7,7 @@ import re
 import uuid
 
 from .storage import read_json, stamp, write_json
+from .acceptance import rules
 from .validation import identifier, text
 
 ROLES = {"tutor", "employee", "sub"}
@@ -53,6 +54,7 @@ def blueprint(body):
         "version": 1,
         "name": text(body.get("name"), "方案名称", 80, required=True),
         "goal": text(body.get("goal", ""), "任务目标", 5000),
+        "acceptance": rules(body.get("acceptance", [])),
         "layout": layout,
         "nodes": [],
     }

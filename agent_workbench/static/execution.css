@@ -249,3 +249,51 @@
     grid-template-columns: 1fr;
   }
 }
+.acceptance-rule {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.acceptance-rule [hidden] {
+  display: none;
+}
+.acceptance-changed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.acceptance-changed input {
+  width: auto;
+}
+.acceptance-evidence {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+#workflow-form .execution-submit {
+  position: static;
+}
+
+.task-library-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 14px 0;
+}
+.task-library-toolbar .field {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.task-library-record {
+  border-top: 1px solid var(--border);
+  padding: 18px 0;
+  overflow-wrap: anywhere;
+}
+.task-library-toolbar select {
+  max-width: 100%;
+}

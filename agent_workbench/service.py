@@ -5,12 +5,13 @@ from __future__ import annotations
 import copy
 import os
 import uuid
+import threading
 from pathlib import Path
 from urllib.parse import parse_qs
 
 from .adapters import discover_agents, validate_mcp
 from .conversations import ConversationManager
-from .execution import ACTIVE
+from .execution import ACTIVE, paginate, record_text
 from .folders import browse_directory
 from .engine import Engine
 from .execution import ExecutionManager
@@ -20,6 +21,8 @@ from .teams import Teams
 from .resources import copy_resource, digest, remove_owned
 from .storage import read_json, write_json
 from .validation import text
+from .task_library import TaskLibrary
+from .data_location import relocate
 
 KINDS = {"json", "codex", "opencode", "vscode", "gemini", "zcode"}
 
@@ -47,6 +50,9 @@ def listing(query, kind=False):
 class WorkbenchService:
     def __init__(self, catalog):
         self.catalog = catalog
+        self.mutation_lock = threading.RLock()
+        self.migration = None
+        self.library = TaskLibrary(catalog.data)
         self.engine = Engine(catalog)
         self.profiles = Profiles(catalog.data)
         self.teams = Teams(catalog.data)
@@ -72,6 +78,10 @@ class WorkbenchService:
         }
 
     def get(self, path, query=""):
+        if path == "/api/data/status":
+            return {"path": str(self.catalog.data), "migration": self.migration}
+        if path == "/api/tasks":
+            return self.task_page(query)
         if path == "/api/catalog":
             return self.catalog.view()
         if path == "/api/scan-status":
@@ -88,14 +98,17 @@ class WorkbenchService:
         if path == "/api/activity":
             return self.activity()
         if path == "/api/conversations":
-            return self.conversations.list()
+            result = self.conversations.list()
+            result["items"] = self.library.decorate("conversation", result["items"])
+            return result
         if path.startswith("/api/conversations/"):
             return self.conversations.get(path.rsplit("/", 1)[-1])
         if path == "/api/workflows":
             query_text, page, size = listing(query)
-            return self.workflows.page(query_text, page, size)
+            rows = self.library.decorate("workflow", self.workflows.list())
+            return {**paginate(rows, query_text, page, size, record_text), "active": sum(r["status"] in ACTIVE for r in rows)}
         if path.startswith("/api/workflows/"):
-            return self.workflows.get(path.rsplit("/", 1)[-1])
+            return {**self.workflows.get(path.rsplit("/", 1)[-1]), **self.library.metadata("workflow", path.rsplit("/", 1)[-1])}
         if path == "/api/runners":
             return self.runs.runners()
         if path.startswith("/api/runners/"):
@@ -105,7 +118,9 @@ class WorkbenchService:
             raise LookupError()
         if path == "/api/runs":
             query_text, page, size, kind = listing(query, kind=True)
-            return self.runs.page(query_text, page, size, kind)
+            rows = self.library.decorate("run", self.runs.list())
+            selected = [r for r in rows if kind == "all" or (kind == "step") == bool(r.get("workflow_id"))]
+            return {**paginate(selected, query_text, page, size, record_text), "active": sum(r["status"] in ACTIVE for r in rows), "kind": kind}
         if path.startswith("/api/runs/"):
             return self.runs.get(path.rsplit("/", 1)[-1])
         with self.catalog.lock:
@@ -118,11 +133,77 @@ class WorkbenchService:
             raise LookupError()
 
     def post(self, path, body):
+        # A native picker can stay open indefinitely. It does not modify app
+        # data and must not hold the lock needed to cancel a running task.
+        if path == "/api/browse-directory":
+            return {"path": browse_directory()}
+        with self.mutation_lock:
+            if self.migration:
+                raise ValueError("数据迁移已完成，请完全退出工坊后重新打开，以使用新目录")
+            if path == "/api/tasks/update":
+                return self.update_task(body)
+            if path == "/api/task-groups/save":
+                return self.library.group(body)
+            if path == "/api/data/migrate":
+                with self.catalog.lock:
+                    if (any(self.activity().values()) or self.runs.owner is not None
+                            or any(m.active is not None for m in (self.runs, self.workflows, self.conversations))):
+                        raise ValueError("请等待运行中的任务完成或取消后再迁移")
+                    if self.catalog.scan_status().get("running"):
+                        raise ValueError("资源扫描正在进行，请稍后再迁移")
+                    backup_only = body.get("backup_only", False)
+                    if not isinstance(backup_only, bool):
+                        raise ValueError("备份选项格式不正确")
+                    try:
+                        result = relocate(self.catalog.data, body.get("path"), control=self.catalog.control, switch=not backup_only)
+                    except OSError as exc:
+                        raise ValueError(f"复制失败（{type(exc).__name__}）；未切换数据目录，原数据保留。请检查空间、权限及路径长度，并选择新的空目录重试。") from exc
+                    if not backup_only:
+                        self.migration = result
+                    return result
+            if path in {"/api/runs/start", "/api/workflows/start", "/api/workflows/resume", "/api/conversations/update", "/api/conversations/message", "/api/conversations/retry"}:
+                kind = "workflow" if "/workflows/" in path else "run" if "/runs/" in path else "conversation"
+                meta = self.library.metadata(kind, body.get("request_id") if path.endswith("/start") else body.get("id"))
+                if meta.get("deleted_at") or meta.get("archived"):
+                    raise ValueError("请先在任务库中恢复此记录，再继续执行")
+            return self._post(path, body)
+
+    def task_page(self, query):
+        params = parse_qs(query)
+        scope = params.get("scope", ["active"])[0]
+        group = params.get("group", [""])[0]
+        q, page, size = listing(query)
+        rows = []
+        sources = [("run", [r for r in self.runs.list() if not r.get("workflow_id")]),
+                   ("workflow", self.workflows.list()), ("conversation", self.conversations.list()["items"])]
+        for kind, records in sources:
+            for record in self.library.decorate(kind, records, scope, group):
+                rows.append({**record, "kind": kind, "title": record.get("title", record.get("name", "")),
+                             "cwd": record.get("cwd", record.get("workspace", "")),
+                             "status": record.get("status", "running" if record.get("running") else "idle")})
+        rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        return {**paginate(rows, q, page, size, record_text), "groups": self.library.read()["groups"]}
+
+    def update_task(self, body):
+        kind, ident = body.get("kind"), body.get("id")
+        manager = {"run": self.runs, "workflow": self.workflows, "conversation": self.conversations}.get(kind)
+        if manager is None:
+            raise ValueError("任务类型不正确")
+        record = manager.get(ident)
+        if record.get("status") in ACTIVE or record.get("running") or manager.active == ident:
+            raise ValueError("运行中的任务不能归档、删除或移动，请先等待或取消")
+        if kind == "run" and record.get("workflow_id"):
+            raise ValueError("协作步骤由所属任务统一管理，请操作父任务")
+        return self.library.update(kind, ident, body)
+
+    def _post(self, path, body):
         if path == "/api/scan":
             self.catalog.start_scan()
             return self.catalog.view()
         if path == "/api/workflows/start":
             return self.workflows.start(body)
+        if path == "/api/workflows/resume":
+            return self.workflows.resume(body)
         if path == "/api/workflows/cancel":
             return self.workflows.cancel(body.get("id"))
         if path == "/api/conversations/create":
@@ -130,13 +211,14 @@ class WorkbenchService:
         if path == "/api/conversations/update":
             return self.conversations.update(body)
         if path == "/api/conversations/delete":
-            return self.conversations.delete(body.get("id"))
+            self.update_task({"kind": "conversation", "id": body.get("id"), "action": "delete"})
+            return {"deleted": body.get("id")}
         if path == "/api/conversations/message":
             return self.conversations.message(body)
         if path == "/api/conversations/cancel":
             return self.conversations.cancel(body.get("id"))
-        if path == "/api/browse-directory":
-            return {"path": browse_directory()}
+        if path == "/api/conversations/retry":
+            return self.conversations.retry(body)
         if path == "/api/runs/start":
             return self.runs.start(body)
         if path == "/api/runs/cancel":

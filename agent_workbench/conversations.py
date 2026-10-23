@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from .execution import ACTIVE
+from .task_library import TaskLibrary
 from .runners import run_mode
 from .storage import read_json, record_directory, record_roots, stamp, write_json
 from .validation import identifier, text
@@ -21,11 +22,33 @@ MAX_MEMBERS = 6
 MAX_MESSAGES = 400
 CONTEXT_LIMIT = 12_000
 TITLE_LIMIT = 60
+# The run log keeps the complete answer; the conversation record keeps a bounded
+# copy so polling and the chat history stay small even for very long replies.
+REPLY_TEXT_LIMIT = 20_000
+ERROR_TEXT_LIMIT = 2_000
+RETRYABLE_STATUSES = frozenset({"failed", "error", "cancelled", "interrupted"})
 
 
 def _short(value, limit):
     value = " ".join(str(value or "").split())
     return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _clip_reply(value):
+    """Keep a bounded reply copy in the conversation; the run log keeps it all."""
+    value = str(value or "")
+    if len(value) <= REPLY_TEXT_LIMIT:
+        return value
+    marker = "\n\n[回复过长已截取，完整结果见执行记录]"
+    return value[: REPLY_TEXT_LIMIT - len(marker)] + marker
+
+
+def _preview(messages):
+    """Prefer the newest member reply; fall back to the newest message with text."""
+    for message in reversed(messages):
+        if message.get("role") == "assistant" and message.get("text"):
+            return message["text"]
+    return next((m.get("text") for m in reversed(messages) if m.get("text")), "")
 
 
 class ConversationManager:
@@ -88,10 +111,7 @@ class ConversationManager:
                         "updated_at": record.get("updated_at") or record.get("created_at"),
                         "created_at": record.get("created_at"),
                         "message_count": len(messages),
-                        "preview": _short(
-                            next((m.get("text") for m in reversed(messages) if m.get("text")), ""),
-                            80,
-                        ),
+                        "preview": _short(_preview(messages), 80),
                         "running": record["id"] == self.active,
                     }
                 )
@@ -168,7 +188,8 @@ class ConversationManager:
         with self.lock:
             if self.closed:
                 raise ValueError("会话服务正在退出")
-            if len(list(self.root.glob("*/conversation.json"))) >= 200:
+            metadata = TaskLibrary(self.root.parent).read()["records"]
+            if sum(not metadata.get(f"conversation:{p.parent.name}", {}).get("deleted_at") for p in self.root.glob("*/conversation.json")) >= 200:
                 raise ValueError("会话数量已达上限，请先删除不用的会话")
             record = {
                 "id": uuid.uuid4().hex,
@@ -198,21 +219,6 @@ class ConversationManager:
             record["updated_at"] = stamp()
             self._save(record)
             return self.get(conversation_id)
-
-    def delete(self, conversation_id):
-        conversation_id = identifier(conversation_id, "会话编号")
-        with self.lock:
-            record = self._read(conversation_id)
-            if record["id"] == self.active:
-                raise ValueError("会话正在回复，请等待完成或取消后再删除")
-            path = self._path(conversation_id)
-            for item in sorted(path.rglob("*"), reverse=True):
-                if item.is_dir():
-                    item.rmdir()
-                else:
-                    item.unlink()
-            path.rmdir()
-            return {"deleted": conversation_id}
 
     def message(self, body):
         conversation_id = identifier(body.get("id"), "会话编号")
@@ -279,6 +285,138 @@ class ConversationManager:
                 saving = True
                 self._save(record)
                 self._begin(record["id"], user_message["id"], [reply["id"] for reply in replies], trusted_cwd)
+            except Exception:
+                self.active = None
+                self.worker = None
+                try:
+                    if saving:
+                        self._save(original)
+                finally:
+                    self.runs.release(conversation_id)
+                raise
+            return self.get(conversation_id)
+
+    def retry(self, body):
+        """Retry replies of the newest round that never produced a result."""
+        conversation_id = identifier(body.get("id"), "会话编号")
+        with self.lock:
+            if self.closed:
+                raise ValueError("会话服务正在退出")
+            if self.active is not None:
+                raise ValueError("会话正在回复，请等待完成或取消后再重试")
+            record = self._read(conversation_id)
+            if not record.get("members"):
+                raise ValueError("请先选择会话成员")
+            if not record.get("workspace"):
+                raise ValueError("请先设置工作区")
+            if not Path(record["workspace"]).is_dir():
+                raise ValueError("会话工作区不存在，请重新设置工作区")
+            messages = record.setdefault("messages", [])
+            indexes = {
+                message["id"]: index
+                for index, message in enumerate(messages)
+                if message.get("id")
+            }
+            round_start = next(
+                (
+                    index
+                    for index in range(len(messages) - 1, -1, -1)
+                    if messages[index].get("role") == "user"
+                ),
+                None,
+            )
+            if round_start is None:
+                raise ValueError("只能重试最近一轮未完成的回复")
+            round_id = messages[round_start]["id"]
+            wanted = body.get("message_ids")
+            if wanted is None:
+                # 省略 message_ids 时，重试最近一轮里所有没有完成的回复。
+                message_ids = [
+                    message["id"]
+                    for message in messages[round_start + 1:]
+                    if message.get("role") == "assistant"
+                    and message.get("status") in RETRYABLE_STATUSES
+                ]
+                if not message_ids:
+                    raise ValueError("最近一轮没有未完成的回复可以重试")
+            else:
+                if not isinstance(wanted, list):
+                    raise ValueError("要重试的回复必须是编号列表")
+                message_ids = list(
+                    dict.fromkeys(identifier(item, "回复编号") for item in wanted)
+                )
+                if not message_ids:
+                    raise ValueError("请选择要重试的回复")
+                if len(message_ids) > MAX_MEMBERS:
+                    raise ValueError(f"一次最多重试 {MAX_MEMBERS} 个回复")
+            targets = []
+            for message_id in message_ids:
+                index = indexes.get(message_id)
+                if (
+                    index is None
+                    or index <= round_start
+                    or messages[index].get("role") != "assistant"
+                ):
+                    raise ValueError("只能重试最近一轮未完成的回复")
+                message = messages[index]
+                if message.get("status") not in RETRYABLE_STATUSES:
+                    raise ValueError(
+                        "只能重试失败、错误、取消或中断的回复"
+                        f"（当前为 {message.get('status')}）"
+                    )
+                member = next(
+                    (item for item in record["members"] if item["id"] == message.get("member")),
+                    None,
+                )
+                if member is None:
+                    raise ValueError(
+                        f"{message.get('name') or '这条回复的成员'}已不是会话成员，"
+                        "请重新绑定成员后再重试"
+                    )
+                targets.append((message, member))
+            if len(messages) + len(targets) > MAX_MESSAGES:
+                raise ValueError("会话消息已达上限，请新建会话继续")
+            trusted_cwd = text(body.get("cursor_trusted_cwd", ""), "Cursor 信任目录", 4096)
+            if trusted_cwd and not any(member["id"] == "cursor" for _message, member in targets):
+                raise ValueError("本轮没有 Cursor 成员，无需 Cursor 信任确认")
+            original = copy.deepcopy(record)
+            now = stamp()
+            replies = [
+                {
+                    "id": uuid.uuid4().hex,
+                    "role": "assistant",
+                    "member": member["id"],
+                    "name": member["name"],
+                    "text": "",
+                    "status": "queued",
+                    "created_at": now,
+                    "retry_of": message["id"],
+                    "round_id": round_id,
+                }
+                for message, member in targets
+            ]
+            record["messages"].extend(replies)
+            record["updated_at"] = now
+            record["status"] = "running"
+            record["error"] = ""
+            user_message = messages[round_start]
+            self.runs.reserve(conversation_id)
+            saving = False
+            try:
+                # 与 message() 一样先校验所有将执行的成员，再一次性写入新回复；
+                # 任何一个成员校验失败都不能留下半轮消息或启动调用。
+                for (_message, member), reply in zip(targets, replies):
+                    self.runs.validate(
+                        self._request(record, member, user_message, reply["id"], trusted_cwd)
+                    )
+                saving = True
+                self._save(record)
+                self._begin(
+                    record["id"],
+                    round_id,
+                    [reply["id"] for reply in replies],
+                    trusted_cwd,
+                )
             except Exception:
                 self.active = None
                 self.worker = None
@@ -416,8 +554,10 @@ class ConversationManager:
                     )
                     if message is not None:
                         message["status"] = run["status"]
-                        message["error"] = run.get("error", "")
-                        message["text"] = run.get("result", "") or run.get("error", "")
+                        message["error"] = str(run.get("error", "") or "")[:ERROR_TEXT_LIMIT]
+                        message["text"] = _clip_reply(
+                            run.get("result", "") or run.get("error", "")
+                        )
                         message["duration_ms"] = _elapsed(message.get("started_at"))
                         message["result_path"] = str(Path(run.get("directory", "")) / "result.md")
                         self._save(record)
@@ -447,7 +587,9 @@ class ConversationManager:
                         if message["id"] in message_ids and message.get("status") in {"queued", "running"}:
                             message["status"] = "cancelled" if outcome == "cancelled" else "error"
                             if not message.get("text"):
-                                message["text"] = message.get("error") or "这一轮没有返回结果。"
+                                message["text"] = _clip_reply(
+                                    message.get("error") or "这一轮没有返回结果。"
+                                )
                     record["status"] = outcome
                     record["error"] = error
                     record["updated_at"] = stamp()

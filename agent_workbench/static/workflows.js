@@ -1,6 +1,7 @@
 import { api } from '/api.js';
 import { e, icon, toast, syncMarkup } from '/ui.js';
-import { editor, exportTeam, previewSteps, storeTeamDraft } from '/team-model.js';
+import { editor, exportTeam, previewSteps, storeTeamDraft, changed } from '/team-model.js';
+import { acceptanceRules, acceptanceLabels, checkKinds } from '/acceptance-model.js';
 import { selectExecution } from '/execution.js';
 import { state, agentName } from '/state.js';
 import { executionBindings } from '/runner-status.js';
@@ -12,14 +13,14 @@ const statuses = {
   starting: '正在启动',
   running: '运行中',
   cancelling: '正在取消',
-  succeeded: '已完成',
+  succeeded: '执行已完成',
   failed: '失败',
   cancelled: '已取消',
   timed_out: '已超时',
   interrupted: '已中断',
   blocked: '未执行',
 };
-const phases = { assign: '分派', deliver: '执行', review: '审核汇总' };
+const phases = { assign: '分派', deliver: '执行', review: '审核汇总', rework: '验收返工' };
 const active = (row) => ['starting', 'running', 'cancelling'].includes(row?.status);
 let selected = null;
 let epoch = 0;
@@ -35,6 +36,44 @@ let historyPage = 1;
 let historyMeta = { total: 0, page: 1, pages: 1 };
 let request = 0;
 let chooseWorkflow = () => {};
+
+function acceptanceRow(rule = { path: '', kind: 'file', expected: '', changed: true }) {
+  return `<fieldset class="acceptance-rule">
+    <legend>交付文件</legend>
+    <label class="field">相对路径<input data-check="path" required maxlength="240" value="${e(rule.path)}" placeholder="例如 outputs/report.json"></label>
+    <label class="field">检查方式<select data-check="kind">${Object.entries(checkKinds)
+      .map(
+        ([key, label]) =>
+          `<option value="${key}" ${rule.kind === key ? 'selected' : ''}>${label}</option>`,
+      )
+      .join('')}</select></label>
+    <label class="field" data-expected-field ${rule.kind !== 'contains' ? 'hidden' : ''}>需要包含的文本<input data-check="expected" maxlength="1000" ${rule.kind === 'contains' ? 'required' : ''} value="${e(rule.expected)}"></label>
+    <label class="acceptance-changed"><input type="checkbox" data-check="changed" ${rule.changed ? 'checked' : ''}> 必须为本次新增或内容变化</label>
+    <button class="btn small" type="button" data-remove-check>移除此项</button>
+  </fieldset>`;
+}
+
+function saveAcceptanceDraft() {
+  const rules = acceptanceRules(
+    [...document.querySelectorAll('.acceptance-rule')].map((row) => ({
+      path: row.querySelector('[data-check="path"]').value,
+      kind: row.querySelector('[data-check="kind"]').value,
+      expected: row.querySelector('[data-check="expected"]').value,
+      changed: row.querySelector('[data-check="changed"]').checked,
+    })),
+  );
+  snapshot.acceptance = rules;
+  editor.team.acceptance = structuredClone(rules);
+  changed();
+  return rules;
+}
+
+function acceptanceEvidence(record) {
+  const evidence = record.acceptance || { status: 'not_configured', checks: [] };
+  return `<h3>${e(acceptanceLabels[evidence.status] || evidence.status)}</h3>
+    <p class="muted">只检查已配置的文件规则，业务内容仍需审核。${e(evidence.checked_at || '')}</p>
+    ${(evidence.checks || []).map((check) => `<article class="acceptance-evidence"><strong>${e(check.path)} · ${e(checkKinds[check.kind])}</strong><p>${e(acceptanceLabels[check.status] || check.status)}${check.reason ? '：' + e(check.reason) : ''}</p>${check.after?.sha256 ? `<small>SHA256：${e(check.after.sha256)}<br>${e(check.after.bytes)} 字节</small>` : ''}</article>`).join('')}`;
+}
 
 export function openWorkflow(id) {
   chooseWorkflow(id);
@@ -80,9 +119,21 @@ export function workflowsPage() {
         <details class="execution-options"><summary>运行选项</summary>
           <label class="field">每一步最长运行时间（分钟）<input name="timeout_minutes" type="number" min="1" max="120" value="${e(settings.timeout_minutes || 30)}"></label>
         </details>
+        <section class="workflow-acceptance" aria-label="交付文件与验收">
+          <h3>交付文件与验收</h3>
+          <p class="muted">所有步骤完成后检查，最多 20 项、每文件 16 MiB。JSON 和文本检查使用 UTF-8。取消“本次新增或内容变化”可审核已有文件。规则随方案草稿保留，可返回画布保存方案。</p>
+          <div id="workflow-checks">${(snapshot.acceptance || []).map(acceptanceRow).join('')}</div>
+          <button class="btn small" type="button" id="workflow-add-check">添加交付文件</button>
+          <p id="workflow-check-note" class="muted" role="status"></p>
+        </section>
+        <section class="workflow-acceptance" aria-label="有限自动返工"><h3>验收失败后的返工</h3>
+          <label class="field">最多额外调用次数<select name="max_reworks">${[0, 1, 2, 3].map((n) => `<option value="${n}" ${Number(settings.max_reworks || 0) === n ? 'selected' : ''}>${n === 0 ? '关闭自动返工' : n + ' 次'}</option>`).join('')}</select></label>
+          <label class="field">负责返工的节点<select name="rework_node_id">${snapshot.nodes.map((n) => `<option value="${e(n.id)}" ${settings.rework_node_id === n.id ? 'selected' : ''}>${e(n.name)}</option>`).join('')}</select></label>
+          <p class="muted">需允许编辑并配置文件验收。只向指定节点提交失败原因；每次返工后检查全部文件，最多 3 次额外调用。次数在重启和续跑后仍累计。</p>
+        </section>
         ${cursorTrustMarkup}
         <div class="execution-submit"><button class="btn primary" id="workflow-start" type="submit" disabled>${icon('play')} 开始自动调度</button>
-          <p class="execution-hint" id="workflow-hint">按画布层级串行执行，共用工作目录。审核节点会列出需修改项；当前不会自动打回或重试。需要修改时，请调整任务后再次手动执行。所有步骤正常返回只表示流程跑完，不代表业务验收通过。</p></div>
+          <p class="execution-hint" id="workflow-hint">按画布层级串行执行，共用工作目录。客户端报错时暂停；文件验收失败可按上方限额返工。中断后可从未完成步骤续跑；已发生的文件修改不会回滚。</p></div>
         <p class="notice error" id="workflow-start-error" hidden></p>
       </form>
       <p class="muted">画布上的 Skill / MCP 是引用，开始调度不会自动装配。多个节点绑定同一客户端时共享该客户端的全局配置。账号和额度由客户端在运行时检查。</p>
@@ -173,7 +224,7 @@ function renderRows() {
         rows: rows.map((row) => ({
           id: row.id,
           title: row.title,
-          status: statuses[row.status] || row.status,
+          status: `${statuses[row.status] || row.status} · ${acceptanceLabels[row.acceptance_status] || '未配置文件验收'}`,
           created_at: row.created_at,
           steps: `${row.steps.filter((step) => step.status === 'succeeded').length}/${row.steps.length}`,
           running: active(row),
@@ -194,17 +245,66 @@ function showRecord(record) {
     target.dataset.id = record.id;
     target.innerHTML = `<div class="section-title"><h2 id="workflow-title"></h2><span class="tag" role="status" id="workflow-status"></span></div>
       <p id="workflow-meta" class="muted execution-location"></p><p class="notice error" id="workflow-error" hidden></p>
-      <div class="execution-controls"><button class="btn" id="workflow-cancel">取消整个调度</button><button class="btn" id="workflow-download">下载汇总</button></div>
-      <div id="workflow-steps"></div><h3>汇总结果</h3><pre class="execution-result" id="workflow-result"></pre>
+      <div class="execution-controls"><button class="btn" id="workflow-cancel">取消整个调度</button><button class="btn" id="workflow-download">下载汇总</button><button class="btn" id="workflow-resume">从断点续跑</button><button class="btn" data-tab="tasks">归档 / 分组 / 删除</button></div>
+      <div id="workflow-steps"></div><section id="workflow-acceptance-result" aria-live="polite"></section>
+      <button class="btn small" id="workflow-evidence-download">下载验收证据</button>
+      <h3>汇总结果</h3><pre class="execution-result" id="workflow-result"></pre>
       <p class="muted execution-location" id="workflow-location"></p>`;
   }
   document.getElementById('workflow-title').textContent = record.title;
   document.getElementById('workflow-status').textContent = statuses[record.status] || record.status;
   document.getElementById('workflow-meta').textContent =
     `${record.cwd} · ${record.permission === 'edit' ? '允许编辑' : '只读 / 规划'}`;
+  syncMarkup(
+    document.getElementById('workflow-acceptance-result'),
+    JSON.stringify(record.acceptance || {}),
+    acceptanceEvidence(record),
+  );
+  const evidenceDownload = document.getElementById('workflow-evidence-download');
+  evidenceDownload.disabled = active(record) || !record.acceptance?.checks?.length;
+  evidenceDownload.onclick = () => {
+    const evidence = {
+      id: record.id,
+      title: record.title,
+      execution_status: record.status,
+      cwd: record.cwd,
+      acceptance: record.acceptance,
+      acceptance_history: record.acceptance_history || [],
+      resumptions: record.resumptions || [],
+      max_reworks: record.max_reworks || 0,
+      rework_calls: record.rework_calls || 0,
+      steps: record.steps.map(({ run_id, name, phase, status, runtime, attempts }) => ({
+        run_id,
+        name,
+        phase,
+        status,
+        runtime,
+        attempts,
+      })),
+      resource_references: record.team.nodes.map(({ id, skills, mcps }) => ({ id, skills, mcps })),
+      scope: '文件规则检查；模型字段为请求设置；资源为方案引用，未验证实际加载版本。',
+    };
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(evidence, null, 2)], { type: 'application/json' }),
+    );
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `acceptance-${record.id.slice(0, 8)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const error = document.getElementById('workflow-error');
   error.hidden = !record.error;
   error.textContent = record.error;
+  const resume = document.getElementById('workflow-resume');
+  resume.hidden =
+    active(record) || (record.status === 'succeeded' && record.acceptance?.status !== 'failed');
+  resume.disabled = Boolean(record.archived || record.deleted_at);
+  resume.textContent = record.steps.every((s) => s.status === 'succeeded')
+    ? '重新验收 / 继续剩余返工'
+    : '从未完成步骤续跑';
+  resume.dataset.recordId = record.id;
+  resume.dataset.trustCwd = record.trust_required ? record.cwd : '';
   const cancel = document.getElementById('workflow-cancel');
   cancel.hidden = !active(record);
   cancel.disabled = record.status === 'cancelling';
@@ -224,7 +324,7 @@ function showRecord(record) {
     record.result ||
     (active(record) ? '调度完成后生成汇总，可点击已启动步骤查看实时日志。' : '没有汇总结果。');
   document.getElementById('workflow-location').textContent =
-    `记录目录：${record.directory}。停止不会回滚已有文件修改。`;
+    `记录目录：${record.directory}。返工已调用 ${record.rework_calls || 0} / ${record.max_reworks || 0} 次；续跑 ${(record.resumptions || []).length} 次。停止不会回滚已有文件修改。${record.archived || record.deleted_at ? '请先到任务库恢复，再继续执行。' : ''}`;
   const download = document.getElementById('workflow-download');
   download.disabled = !record.result;
   download.textContent = record.result_truncated ? '下载显示部分' : '下载汇总';
@@ -297,6 +397,43 @@ export function mountWorkflowsUI() {
     document.querySelector('[data-tab="teams"]').click();
   };
   const form = document.getElementById('workflow-form');
+  const checks = document.getElementById('workflow-checks');
+  const note = document.getElementById('workflow-check-note');
+  const saveChecks = () => {
+    pending = null;
+    try {
+      saveAcceptanceDraft();
+      note.textContent = editor.draftSaved
+        ? '已保存到方案草稿。'
+        : '草稿未能保存，请返回画布保存方案。';
+    } catch (error) {
+      note.textContent = `${error.message}。未填写完整的规则尚未保存。`;
+    }
+    document.getElementById('workflow-add-check').disabled = checks.children.length >= 20;
+  };
+  document.getElementById('workflow-add-check').disabled = checks.children.length >= 20;
+  document.getElementById('workflow-add-check').onclick = () => {
+    if (checks.children.length >= 20) return;
+    checks.insertAdjacentHTML('beforeend', acceptanceRow());
+    checks.lastElementChild.querySelector('input').focus();
+    saveChecks();
+  };
+  checks.oninput = (event) => {
+    const row = event.target.closest('.acceptance-rule');
+    if (row) {
+      const expected = row.querySelector('[data-expected-field]');
+      expected.hidden = row.querySelector('[data-check="kind"]').value !== 'contains';
+      expected.querySelector('input').required = !expected.hidden;
+    }
+    saveChecks();
+  };
+  checks.onclick = (event) => {
+    const remove = event.target.closest('[data-remove-check]');
+    if (remove) {
+      remove.closest('.acceptance-rule').remove();
+      saveChecks();
+    }
+  };
   const workspaceTrust = mountCursorTrust(form, () =>
     snapshot.nodes.some((node) => node.agentId === 'cursor'),
   );
@@ -309,6 +446,8 @@ export function mountWorkflowsUI() {
           cwd: form.elements.cwd.value,
           permission: form.elements.permission.value,
           timeout_minutes: Number(form.elements.timeout_minutes.value),
+          max_reworks: Number(form.elements.max_reworks.value),
+          rework_node_id: form.elements.rework_node_id.value,
         }),
       );
     } catch {
@@ -322,12 +461,15 @@ export function mountWorkflowsUI() {
     renderRows();
     pending ||= crypto.randomUUID().replaceAll('-', '');
     try {
+      saveAcceptanceDraft();
       const record = await api('workflows/start', {
         request_id: pending,
         team: snapshot,
         cwd: form.elements.cwd.value,
         permission: form.elements.permission.value,
         timeout_minutes: Number(form.elements.timeout_minutes.value),
+        max_reworks: Number(form.elements.max_reworks.value),
+        rework_node_id: form.elements.rework_node_id.value,
         cursor_trusted_cwd: workspaceTrust.value(),
       });
       selected = record.id;
@@ -368,6 +510,40 @@ export function mountWorkflowsUI() {
     if (step && !step.disabled) {
       selectExecution(step.dataset.workflowRun);
       document.querySelector('[data-tab="execution"]').click();
+    }
+    const resume = event.target.closest('#workflow-resume');
+    if (resume) {
+      if (
+        resume.disabled ||
+        !window.confirm('将保留已完成步骤与当前文件，只继续未完成部分并重新验收。继续执行？')
+      )
+        return;
+      const trusted = resume.dataset.trustCwd || '';
+      if (
+        trusted &&
+        !window.confirm(
+          `Cursor 要求信任原工作目录：${trusted}。是否确认信任？Cursor 将记住该目录。`,
+        )
+      )
+        return;
+      resume.disabled = true;
+      // Retain the id across uncertain responses so a second click cannot create
+      // another attempt after a network failure.
+      resume.dataset.requestId ||= crypto.randomUUID().replaceAll('-', '');
+      try {
+        await api('workflows/resume', {
+          id: resume.dataset.recordId,
+          request_id: resume.dataset.requestId,
+          cursor_trusted_cwd: trusted,
+        });
+        delete resume.dataset.requestId;
+        if (current === epoch) await poll(current);
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        if (resume.isConnected) resume.disabled = false;
+      }
+      return;
     }
     if (!event.target.closest('#workflow-cancel')) return;
     try {

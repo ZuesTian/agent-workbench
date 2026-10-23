@@ -5,16 +5,18 @@ from __future__ import annotations
 import copy
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from .execution import ACTIVE, TRUST_PROMPT, paginate, record_text
+from . import acceptance
 from .runners import run_mode
 from .storage import read_json, record_directory, record_roots, write_json, stamp
 from .teams import blueprint
 from .validation import identifier, text
 
 
-PHASES = {"assign": "分派", "deliver": "执行", "review": "审核汇总"}
+PHASES = {"assign": "分派", "deliver": "执行", "review": "审核汇总", "rework": "验收返工"}
 
 
 def execution_steps(team):
@@ -38,7 +40,7 @@ def execution_steps(team):
 
 
 def _workflow_fields(record):
-    return {key: record.get(key) for key in ("team", "cwd", "permission", "timeout_minutes", "cursor_trusted_cwd")}
+    return {key: record.get(key) for key in ("team", "cwd", "permission", "timeout_minutes", "cursor_trusted_cwd", "max_reworks", "rework_node_id")}
 
 
 def _same_workflow(existing, request):
@@ -52,7 +54,7 @@ def _workflow_trust_retry(existing, request):
         return False
     if trusted != request.get("cwd"):
         return False
-    unchanged = ("team", "cwd", "permission", "timeout_minutes")
+    unchanged = ("team", "cwd", "permission", "timeout_minutes", "max_reworks", "rework_node_id")
     if any(existing.get(key) != request.get(key) for key in unchanged):
         return False
     return existing.get("trust_required") is True or TRUST_PROMPT in str(existing.get("error") or "")
@@ -71,6 +73,7 @@ def step_prompt(workflow, step, previous):
         "assign": "请将总目标分解为下列成员的具体任务、交付物和验收条件。本步只输出分派说明；调度器会逐一执行成员。",
         "deliver": "完成本节点职责，结合已有交接结果开展工作。交付结果、产物路径、验证依据和未解决问题。",
         "review": "审核已有成果与验证依据，汇总当前节点的交付。明确列出未完成项或验收问题；不要把执行完成等同于质量通过。",
+        "rework": "根据下列文件验收失败原因修复交付，保留已通过部分。不要修改验收条件；完成后调度器会重新检查全部文件。",
     }
     lines = [
         f"# {team['name']} / {node['name']} / {PHASES[phase]}",
@@ -90,7 +93,12 @@ def step_prompt(workflow, step, previous):
             "Skills：" + "、".join(ref["name"] for ref in node["skills"]),
             "MCP：" + "、".join(ref["name"] for ref in node["mcps"]),
         ]
-    base = clipped("\n".join(lines), 17_000)
+    contract = acceptance.prompt_rules(team.get("acceptance", []))
+    if phase == "rework":
+        # Reserve room for the failure report even with a long goal/duty. It is
+        # the repair instruction, so it cannot be dropped by clipping context.
+        contract += "\n\n## 本次返工原因\n" + clipped(step.get("feedback", ""), 4000)
+    base = clipped("\n".join(lines), 17_000 - len(contract)) + contract
     # Recent results first, with each result's source and full on-disk location.
     # Earlier assignments remain visible through a compact history index.
     handoffs = []
@@ -129,6 +137,8 @@ class WorkflowManager:
                     for step in record["steps"]:
                         if step["status"] in {"waiting", "starting", "running"}:
                             step["status"] = "interrupted"
+                    if record.get("acceptance", {}).get("status") == "pending":
+                        record["acceptance"] = acceptance.evaluate(record.get("cwd"), record["acceptance"], "interrupted")
                     write_json(path, record)
             except (OSError, ValueError, KeyError):
                 pass
@@ -155,6 +165,7 @@ class WorkflowManager:
                         "id", "title", "status", "created_at", "finished_at", "steps", "error",
                     )})
                     rows[-1]["cwd"] = record.get("cwd") or ""
+                    rows[-1]["acceptance_status"] = record.get("acceptance", {}).get("status", "not_configured")
                 except (ValueError, OSError, LookupError, KeyError):
                     continue
             return sorted(rows, key=lambda row: row["created_at"], reverse=True)
@@ -204,6 +215,15 @@ class WorkflowManager:
             raise ValueError("\n".join(errors))
         request = dict(team=team, cwd=cwd, permission=permission,
                        timeout_minutes=body.get("timeout_minutes", 30), cursor_trusted_cwd=trusted_cwd)
+        maximum = body.get("max_reworks", 0)
+        if type(maximum) is not int or not 0 <= maximum <= 3:
+            raise ValueError("自动返工次数必须为 0–3")
+        reworker = body.get("rework_node_id", "") if maximum else ""
+        if maximum and (permission != "edit" or not team["acceptance"]):
+            raise ValueError("自动返工需要允许编辑并配置文件验收")
+        if maximum and not any(n["id"] == reworker for n in team["nodes"]):
+            raise ValueError("请选择负责返工的节点")
+        request.update(max_reworks=maximum, rework_node_id=reworker)
         with self.lock:
             path = self._path(workflow_id)
             if (path / "workflow.json").is_file():
@@ -220,6 +240,8 @@ class WorkflowManager:
                         cursor_trusted_cwd=request["cursor_trusted_cwd"], status="starting",
                         finished_at=None, error="", trust_required=False,
                     )
+                    if existing.get("acceptance", {}).get("checks"):
+                        existing["acceptance"].update(status="pending", checked_at=None)
                     for step in existing["steps"]:
                         if step["status"] != "succeeded":
                             step.update(status="waiting", error="", launched=False)
@@ -233,6 +255,7 @@ class WorkflowManager:
                 raise ValueError("调度服务正在退出")
             self.runs.reserve(workflow_id)
             try:
+                evidence = acceptance.prepare(cwd, team["acceptance"])
                 path.mkdir(exist_ok=False)
                 steps = execution_steps(team)
                 for index, step in enumerate(steps):
@@ -244,8 +267,11 @@ class WorkflowManager:
                     )
                 record = {
                     **request, "id": workflow_id, "title": team["name"], "status": "starting",
-                    "created_at": stamp(), "finished_at": None, "steps": steps, "error": "",
+                    "created_at": datetime.now().astimezone().isoformat(timespec="microseconds"),
+                    "finished_at": None, "steps": steps, "error": "",
                     "trust_required": False,
+                    "acceptance": evidence,
+                    "rework_calls": 0, "acceptance_history": [], "resumptions": [],
                 }
                 self._begin(record)
             except Exception:
@@ -262,6 +288,64 @@ class WorkflowManager:
                                        name="collaboration-scheduler", daemon=False)
         self.worker.start()
 
+    def resume(self, body):
+        request_id = identifier(body.get("request_id"), "续跑请求编号")
+        with self.lock:
+            record = self._read(body.get("id"))
+            if any(item["id"] == request_id for item in record.get("resumptions", [])):
+                return self.get(record["id"])
+            if self.closed or record["status"] in ACTIVE:
+                raise ValueError("任务正在运行或服务正在退出")
+            if record["status"] == "succeeded" and record.get("acceptance", {}).get("status") != "failed":
+                raise ValueError("任务已完成且无需重新验收")
+            trusted = text(body.get("cursor_trusted_cwd", ""), "Cursor 信任目录", 4096)
+            if trusted:
+                if not record.get("trust_required") or trusted != record["cwd"]:
+                    raise ValueError("只能为要求信任的原任务工作目录补充确认")
+                record["cursor_trusted_cwd"] = trusted
+            pending = []
+            for step in record["steps"]:
+                # Recover the narrow crash window between a CLI finishing and its
+                # scheduler checkpoint. The terminal run is the durable authority.
+                try:
+                    run = self.runs.get(step["run_id"])
+                except LookupError:
+                    if step.get("launched") or step["status"] == "succeeded":
+                        raise ValueError("已启动步骤的执行记录缺失，无法可靠续跑") from None
+                    run = None
+                if run is not None:
+                    if run["status"] == "succeeded":
+                        if not (Path(run["directory"]) / "result.md").is_file():
+                            raise ValueError("已完成步骤的交接文件缺失，无法可靠续跑")
+                        step.update(status="succeeded", error="", runtime=run.get("runtime"))
+                if step["status"] != "succeeded":
+                    pending.append(step)
+            if any(s["phase"] == "rework" for s in pending) and record.get("rework_calls", 0) >= record.get("max_reworks", 0):
+                raise ValueError("返工调用次数已用尽；请检查日志和产物后建立新任务")
+            for step in pending:
+                node = next(n for n in record["team"]["nodes"] if n["id"] == step["node_id"])
+                self.runs.validate({
+                    "request_id": request_id, "agent": node["agentId"], "prompt": node["prompt"],
+                    "cwd": record["cwd"], "sandbox": run_mode(node["agentId"], record["permission"]),
+                    "model": node["model"], "timeout_minutes": record["timeout_minutes"],
+                    "cursor_trusted_cwd": record["cursor_trusted_cwd"] if node["agentId"] == "cursor" else "",
+                })
+            if not Path(record["cwd"]).is_dir():
+                raise ValueError("原工作目录不存在，无法续跑")
+            self.runs.reserve(record["id"])
+            try:
+                for step in pending:
+                    step.setdefault("attempts", []).append({key: step.get(key) for key in ("run_id", "status", "error", "runtime", "launched")})
+                    step.update(run_id=uuid.uuid4().hex, status="waiting", launched=False, error="")
+                record.setdefault("resumptions", []).append({"id": request_id, "at": stamp(), "pending_steps": len(pending)})
+                record.update(status="starting", error="", finished_at=None, trust_required=False)
+                self._begin(record)
+            except Exception:
+                self.active = None
+                self.runs.release(record["id"])
+                raise
+            return self.get(record["id"])
+
     def cancel(self, workflow_id):
         with self.lock:
             record = self._read(workflow_id)
@@ -277,17 +361,49 @@ class WorkflowManager:
     def _execute(self, workflow_id):
         previous = []
         outcome, error = "failed", ""
+        evidence = None
         try:
             with self.lock:
                 record = self._read(workflow_id)
                 record["status"] = "running"
                 self._save(record)
-            for index, step in enumerate(record["steps"]):
+            index = 0
+            while True:
+                if index == len(record["steps"]):
+                    outcome = "succeeded"
+                    evidence = acceptance.evaluate(record["cwd"], record["acceptance"], outcome, self.cancel_requested.is_set)
+                    with self.lock:
+                        record["acceptance"] = evidence
+                        record.setdefault("acceptance_history", []).append(copy.deepcopy(evidence))
+                        self._save(record)
+                    if evidence["status"] != "failed" or self.cancel_requested.is_set() or record.get("rework_calls", 0) >= record.get("max_reworks", 0):
+                        break
+                    node = next(n for n in record["team"]["nodes"] if n["id"] == record["rework_node_id"])
+                    record["steps"].append(dict(
+                        node_id=node["id"], name=node["name"], agent=node["agentId"], phase="rework",
+                        status="waiting", run_id=uuid.uuid4().hex, error="", launched=False,
+                        feedback="\n".join(f"- {c['path']}：{c.get('reason', '')}" for c in evidence["checks"] if c["status"] != "passed"),
+                    ))
+                    with self.lock:
+                        self._save(record)
+                step = record["steps"][index]
+                index += 1
                 node = next(item for item in record["team"]["nodes"] if item["id"] == step["node_id"])
+                if step["status"] == "succeeded":
+                    run = self.runs.get(step["run_id"])
+                    previous.append({**step, "result": run["result"], "path": str(Path(run["directory"]) / "result.md")})
+                    continue
                 with self.lock:
                     if self.cancel_requested.is_set():
                         outcome = "cancelled"
                         break
+                    if step["phase"] == "rework":
+                        if record.get("rework_calls", 0) >= record.get("max_reworks", 0):
+                            raise ValueError("返工调用次数已用尽")
+                        record["rework_calls"] = record.get("rework_calls", 0) + 1
+                        self._save(record)
+                    outcome = "failed"
+                    evidence = None
                     run = self.runs.start({
                         "request_id": step["run_id"], "agent": node["agentId"],
                         "prompt": step_prompt(record, step, previous),
@@ -306,6 +422,7 @@ class WorkflowManager:
                             self.runs.worker.join(timeout=1)
                     run = self.runs.get(run["id"])
                 step["status"], step["error"] = run["status"], run["error"]
+                step["runtime"] = run.get("runtime")
                 with self.lock:
                     self._save(record)
                 if run["status"] != "succeeded" or self.cancel_requested.is_set():
@@ -315,8 +432,10 @@ class WorkflowManager:
                 previous.append({
                     **step, "result": run["result"], "path": str(Path(run["directory"]) / "result.md"),
                 })
-            else:
-                outcome = "succeeded"
+            if evidence is None or outcome != "succeeded":
+                evidence = acceptance.evaluate(record["cwd"], record["acceptance"], outcome, self.cancel_requested.is_set)
+            if self.cancel_requested.is_set():
+                outcome = "cancelled"
         except Exception as exc:
             error = str(exc) if isinstance(exc, ValueError) else f"调度失败：{type(exc).__name__}"
         finally:
@@ -330,9 +449,15 @@ class WorkflowManager:
                     self.runs.worker.join(timeout=20)
             with self.lock:
                 record = self._read(workflow_id)
+                if evidence is None:
+                    evidence = acceptance.evaluate(record.get("cwd"), record.get("acceptance", {"checks": []}), "failed")
+                if self.cancel_requested.is_set() and outcome == "succeeded":
+                    outcome = "cancelled"
+                    evidence = acceptance.evaluate(record.get("cwd"), evidence, outcome)
                 record.update(
                     status=outcome, finished_at=stamp(), error=error,
                     trust_required=outcome == "failed" and TRUST_PROMPT in error,
+                    acceptance=evidence,
                 )
                 for step in record["steps"]:
                     if step["status"] in {"waiting", "running"}:
@@ -346,8 +471,9 @@ class WorkflowManager:
                 ]
                 if error:
                     summary += ["", "## 中断原因", error]
+                summary += acceptance.summary_lines(evidence)
                 roots = {n["id"] for n in record["team"]["nodes"] if n["parentId"] is None}
-                reports = [p for p in previous if p["node_id"] in roots and p["phase"] != "assign"]
+                reports = [p for p in previous if (p["node_id"] in roots and p["phase"] != "assign") or p["phase"] == "rework"]
                 if not reports and previous:
                     reports = previous[-1:]
                 for report in reports:

@@ -32,6 +32,8 @@ def emit(x):print(json.dumps(x),flush=True)
 emit({"type":"session","sessionId":"fixture"} if dsh else {"type":"thread.started","thread_id":"fixture"})
 if "SLOW_NODE" in duty:time.sleep(120)
 failed="FAIL_NODE" in duty
+if "WRITE_ARTIFACT" in duty:
+ Path("handoff.json").write_text(json.dumps({"result":"HANDOFF_TOKEN"}),encoding="utf-8")
 if p=="missing-final":sys.exit(0)
 answer="HANDOFF_TOKEN " + kind + (" received" if "HANDOFF_TOKEN" in p else " initial")
 if cursor:
@@ -118,6 +120,7 @@ def test_three_protocols_order_and_real_result_handoff(runtime):
     request["team"]["goal"] = "编辑中的草稿不应影响运行"
     result = wait(flows, flow["id"])
     assert result["status"] == "succeeded"
+    assert result["acceptance"]["status"] == "not_configured"
     assert [(s["name"], s["phase"]) for s in result["steps"]] == [
         ("负责人", "assign"), ("实现", "deliver"), ("核验", "deliver"), ("负责人", "review"),
     ]
@@ -135,6 +138,39 @@ def test_three_protocols_order_and_real_result_handoff(runtime):
     assert len(flows.list()) == 1 and len(runs.list()) == 4
     with pytest.raises(ValueError, match="不同协作"):
         flows.start(request)
+
+
+def test_delivery_acceptance_is_persisted_separately_from_execution(runtime):
+    flows, runs, work = runtime
+    request = body(work, [node("codex", "执行者", prompt="WRITE_ARTIFACT")])
+    request["permission"] = "edit"
+    request["team"]["acceptance"] = [{"path": "handoff.json", "kind": "json"}]
+    result = wait(flows, flows.start(request)["id"])
+    assert result["status"] == "succeeded"
+    assert result["acceptance"]["status"] == "passed"
+    assert "文件验收通过" in result["result"]
+    assert result["steps"][0]["runtime"]["client"] == "codex"
+    assert result["steps"][0]["runtime"]["requested_model"] is None
+    run = runs.get(result["steps"][0]["run_id"])
+    assert "handoff.json" in run["prompt"]
+    disk = json.loads((Path(result["directory"]) / "workflow.json").read_text(encoding="utf-8"))
+    assert disk["acceptance"] == result["acceptance"]
+    assert flows.list()[0]["acceptance_status"] == "passed"
+    # Reusing unchanged output must fail the freshness check despite clean CLI exit.
+    request["request_id"] = uuid.uuid4().hex
+    repeated = wait(flows, flows.start(request)["id"])
+    assert repeated["status"] == "succeeded" and repeated["acceptance"]["status"] == "failed"
+    assert "启动前相同" in repeated["acceptance"]["checks"][0]["reason"]
+
+
+def test_acceptance_preflight_releases_lease_without_launching(runtime):
+    flows, runs, work = runtime
+    (work / "directory").mkdir()
+    request = body(work)
+    request["team"]["acceptance"] = [{"path": "directory", "kind": "file"}]
+    with pytest.raises(ValueError, match="基线"):
+        flows.start(request)
+    assert runs.owner is None and runs.list() == [] and flows.list() == []
 
 
 def test_failure_stops_all_following_nodes_even_exit_zero(runtime):

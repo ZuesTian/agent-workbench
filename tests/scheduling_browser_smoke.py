@@ -91,7 +91,7 @@ def main():
                 page.wait_for_timeout(400)
             assert record and record["status"] == "succeeded", record
             summary.update(id=record["id"], status=record["status"], steps=record["steps"])
-            page.locator("#workflow-status").get_by_text("已完成", exact=True).wait_for()
+            page.locator("#workflow-status").get_by_text("执行已完成", exact=True).wait_for()
             expected = "AGENT_WORKBENCH_COLLAB_OK" if live else "HANDOFF_TOKEN"
             assert expected in record["result"]
             with page.expect_download() as download:
@@ -109,7 +109,7 @@ def main():
             assert page.locator("#run-result").inner_text()
             page.reload()
             page.locator('.nav-button[data-tab="workflows"]').click()
-            page.locator("#workflow-status").get_by_text("已完成", exact=True).wait_for()
+            page.locator("#workflow-status").get_by_text("执行已完成", exact=True).wait_for()
             summary.update(result_handoff=True, download_exact=True, reload_history=True,
                            responsive_widths=[1440, 1280, 1024, 768, 390], browser_errors=errors)
             assert not errors, errors

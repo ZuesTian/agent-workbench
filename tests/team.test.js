@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { acceptanceRules } from '../agent_workbench/static/acceptance-model.js';
 import {
   createTeam,
   reparent,
@@ -15,9 +16,36 @@ import {
   taskBrief,
   editor,
   setTeam,
+  changed,
   restoreTeamDraft,
   preserveTeamDraftBeforeClose,
 } from '../agent_workbench/static/team-model.js';
+
+test('artifact rules survive export/import and reject unsafe paths and oversized contracts', () => {
+  const team = createTeam('blank');
+  team.acceptance = [
+    { path: '成果/report.json', kind: 'json' },
+    { path: 'note.txt', kind: 'contains', expected: '完成', changed: false },
+  ];
+  const exported = exportTeam(team);
+  assert.deepEqual(importTeam(exported).acceptance, exported.acceptance);
+  assert.equal(exported.acceptance[0].changed, true);
+  assert(taskBrief(exported, { agents: [] }).includes('成果/report.json'));
+  for (const path of ['../x', 'C:/x', '/x', 'x:stream', 'NUL.txt', 'a//b']) {
+    assert.throws(() => acceptanceRules([{ path, kind: 'file' }]));
+  }
+  assert.throws(
+    () =>
+      acceptanceRules(
+        Array.from({ length: 5 }, (_, i) => ({
+          path: `${i}.txt`,
+          kind: 'contains',
+          expected: 'x'.repeat(1000),
+        })),
+      ),
+    /4000/,
+  );
+});
 
 test('hierarchy rejects cycles and invalid parents without changing the relationship', () => {
   const team = createTeam();
@@ -188,6 +216,22 @@ test('failed local draft storage still prevents silent loss on exit', (t) => {
   setTeam(createTeam());
   assert.equal(preserveTeamDraftBeforeClose(), false);
   assert.equal(editor.dirty, true);
+  assert.equal(editor.draftSaved, false);
   setTeam(createTeam(), true);
   assert.equal(preserveTeamDraftBeforeClose(), true);
+});
+
+test('a failed draft write is visible before the window is closed', (t) => {
+  const previous = globalThis.localStorage;
+  globalThis.localStorage = {
+    setItem: () => {
+      throw new Error('Storage full');
+    },
+  };
+  t.after(() => {
+    globalThis.localStorage = previous;
+  });
+  setTeam(createTeam());
+  changed();
+  assert.equal(editor.draftSaved, false);
 });

@@ -18,7 +18,6 @@ const paths = {
   expand: '<path d="M8 3H3v5m18 0V3h-5M3 16v5h5m8 0h5v-5"/>',
   focus: '<path d="M8 3H3v5m18 0V3h-5M3 16v5h5m8 0h5v-5"/><circle cx="12" cy="12" r="3"/>',
   minus: '<path d="M5 12h14"/>',
-  power: '<path d="M12 2v10M6.3 4.9a9 9 0 1 0 11.4 0"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   skill: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>',
   plug: '<path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4"/>',

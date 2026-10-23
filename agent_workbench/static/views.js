@@ -15,6 +15,9 @@ import { executionPage, mountExecutionUI, unmountExecutionUI } from '/execution.
 import { workflowsPage, mountWorkflowsUI, unmountWorkflowsUI } from '/workflows.js';
 import { chatPage, chatContextItems, mountChatUI, unmountChatUI } from '/conversations.js';
 
+import { taskLibraryPage, mountTaskLibrary, unmountTaskLibrary } from '/task-library.js';
+import { dataSettings, mountDataSettings } from '/data-settings.js';
+
 const PAGE_SIZE = 24;
 export const compactLayout = window.matchMedia('(max-width: 1100px)');
 
@@ -31,10 +34,8 @@ function ensureShell() {
       <a class="brand" href="#main-content"><img src="/icon.svg" alt=""><div><strong>Agent 工坊</strong><small>资源 · 装配 · 协作</small></div></a>
       <button class="sidebar-search" data-action="focus-search">${icon('search')}<span>搜索资源</span><kbd>Ctrl K</kbd></button>
       <nav id="navigation"></nav>
-      <div class="sidebar-footer"><p><span class="local-dot"></span><span id="desktop-state">本地运行</span></p><p>关闭窗口后仍在后台运行</p>
-        <div class="window-actions"><button id="minimize-window" data-action="minimize" title="最小化窗口，任务继续运行">${icon('minus')} 最小化</button>
-        <button data-action="shutdown" title="关闭窗口和后台服务">${icon('power')} 完全退出</button></div>
-        <span class="version">Agent 工坊 · 1.0.0</span></div>
+      <div class="sidebar-footer"><p><span class="local-dot"></span><span id="desktop-state">本地运行</span></p><p>关闭窗口后仍在后台运行；完全退出请右键点开右下角托盘图标。</p>
+        <span class="version">Agent 工坊 · 1.2.0</span></div>
     </aside>
     <aside id="context-column" class="context-column" aria-label="当前页面的对象列表"></aside>
     <div class="workspace"><header class="topbar"><div class="breadcrumb">本机工作空间 <span>/</span> <b id="breadcrumb-name"></b></div>
@@ -42,8 +43,6 @@ function ensureShell() {
         <p id="session-label">本地运行</p>
         <p id="session-tasks">当前无运行中任务。关闭窗口后程序仍在后台运行。</p>
         <button type="button" data-tab="execution">查看运行中任务</button>
-        <button type="button" data-action="minimize" id="session-minimize">最小化</button>
-        <button type="button" data-action="shutdown">完全退出</button>
       </div></details><button class="icon-button" data-action="theme" aria-label="切换明暗主题" title="切换明暗主题">${icon('sun')}</button>
       <button class="icon-button" data-action="scan" aria-label="重新扫描本机资源" title="重新扫描">${icon('refresh')}</button>
       <button id="composer-trigger" class="btn" data-action="toggle-composer" aria-controls="composer-panel">${icon('layers')}<span>装配台</span><b id="draft-count">0</b></button></div></header>
@@ -60,7 +59,7 @@ function renderChrome() {
     ${nav('overview', 'grid', '总览')}${nav('chat', 'chat', '会话')}
     ${nav('teams', 'network', '协作编排')}
     ${nav('execution', 'terminal', '执行任务')}
-    ${nav('workflows', 'play', '自动调度')}
+    ${nav('workflows', 'play', '自动调度')}${nav('tasks', 'folder', '任务库')}
     <p class="nav-caption">能力资源</p>${nav('skills', 'skill', 'Skills', counts.skill_names)}
     ${nav('mcps', 'plug', 'MCP', counts.mcp_names)}${nav('roles', 'robot', '子 Agent', counts.roles)}
     <p class="nav-caption">管理</p>${nav('profiles', 'layers', '装配方案', state.profiles.length)}
@@ -71,7 +70,6 @@ function renderChrome() {
   byId('composer-trigger').setAttribute('aria-expanded', String(state.composerOpen));
   byId('composer-trigger').classList.toggle('active', state.composerOpen);
   byId('desktop-state').textContent = state.desktop.available ? '后台运行 · 托盘可用' : '本地运行';
-  byId('minimize-window').disabled = !state.desktop.available;
   paintSession();
   renderScanStatus();
   renderContext();
@@ -83,16 +81,14 @@ export function paintSession() {
   const summary = byId('session-summary-text');
   const label = byId('session-label');
   const tasks = byId('session-tasks');
-  const minimize = byId('session-minimize');
   const running = state.desktop?.available ? '后台运行 · 托盘可用' : '本地运行';
   if (summary) summary.textContent = active ? `运行中 ${active}` : running;
   if (label) label.textContent = running;
   if (tasks) {
     tasks.textContent = active
-      ? `有 ${active} 个任务仍在运行。关闭窗口后它们会继续；完全退出会取消它们。`
-      : '当前无运行中任务。关闭窗口后程序仍在后台运行。';
+      ? `有 ${active} 个任务仍在运行。关闭窗口后它们会继续；右键托盘图标可完全退出（会取消它们）。`
+      : '当前无运行中任务。关闭窗口后程序仍在后台运行，右键托盘图标可完全退出。';
   }
-  if (minimize) minimize.disabled = !state.desktop?.available;
 }
 
 export function renderScanStatus() {
@@ -133,6 +129,7 @@ export function render() {
       teams: teamPage,
       execution: executionPage,
       workflows: workflowsPage,
+      tasks: taskLibraryPage,
       skills: () => resources('skills'),
       mcps: () => resources('mcps'),
       roles,
@@ -149,6 +146,9 @@ export function render() {
     else unmountExecutionUI();
     if (state.tab === 'workflows') mountWorkflowsUI();
     else unmountWorkflowsUI();
+    if (state.tab === 'tasks') mountTaskLibrary();
+    else unmountTaskLibrary();
+    if (state.tab === 'settings') mountDataSettings();
     if (state.tab === 'chat') mountChatUI();
     else unmountChatUI();
   });
@@ -191,6 +191,7 @@ const pageSymbols = {
   teams: 'network',
   execution: 'terminal',
   workflows: 'play',
+  tasks: 'folder',
   skills: 'skill',
   mcps: 'plug',
   roles: 'robot',
@@ -499,6 +500,13 @@ function contextColumn() {
         : '<p class="context-note">开始调度后，记录会出现在这里。</p>',
     );
   }
+  if (state.tab === 'tasks')
+    return contextPanel(
+      '任务整理',
+      '',
+      [],
+      '<p class="context-note">在主区创建分组、归档任务或恢复回收站记录。分组不改变协作编排。</p>',
+    );
   if (state.tab === 'profiles') {
     return contextPanel(
       '装配方案',
@@ -966,7 +974,7 @@ function settingsPage() {
       '管理你的工作空间',
       '接入更多本机资源，查看扫描结果与保存位置。',
     ) +
-    `<div class="settings-grid"><section class="settings-card" id="settings-data"><h2>本地数据</h2><p>方案、资源库、备份与执行记录保存在当前 Windows 用户目录。</p><code class="data-path">${e(c.data_dir)}</code><p>仅监听 127.0.0.1。扫描不启动 MCP；执行任务时由 Agent 调用模型与工具。</p></section>
+    `<div class="settings-grid"><section class="settings-card" id="settings-data">${dataSettings(c.data_dir)}</section>
     <section class="settings-card" id="settings-install"><div class="section-title"><h2>程序查找目录</h2><button class="btn small" data-action="add-install-root">${icon('plus')} 添加目录</button></div>
       <p>自动读取 Windows 安装记录并核对程序文件。免安装或自选位置可加在这里，向下查找三层；目前支持 ${state.catalog.agents.some((a) => a.id === 'zcode') ? 'Zcode、DeepSeek Harness 等内置客户端' : '内置客户端'}。</p>
       ${c.install_roots.map((path) => `<div class="path-row"><code>${e(path)}</code><button class="icon-button" data-remove-install-root="${e(path)}" aria-label="移除程序目录 ${e(path)}">${icon('close')}</button></div>`).join('') || '<p class="muted">尚未添加自选程序目录。</p>'}

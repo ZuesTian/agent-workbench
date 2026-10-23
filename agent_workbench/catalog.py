@@ -75,11 +75,9 @@ class Catalog:
         )
         self.home = home or Path.home()
         self.roaming = roaming or Path(os.getenv("APPDATA", str(self.home / ".config")))
-        self.data = (
-            data
-            or Path(os.getenv("LOCALAPPDATA", str(self.home / ".local/share")))
-            / "AgentWorkbench"
-        )
+        from .data_location import control_root, data_root
+        self.control = data or control_root(self.home)
+        self.data = data or data_root(self.home)
         self.data.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.settings_path = self.data / "settings.json"

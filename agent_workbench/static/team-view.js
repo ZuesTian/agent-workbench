@@ -64,6 +64,7 @@ export function teamPage() {
 }
 
 export function saveStatus() {
+  if (editor.draftSaved === false) return '草稿未能保存到本机浏览器 · 请导出或保存方案';
   return editor.dirty
     ? '有未保存的更改'
     : editor.team.id

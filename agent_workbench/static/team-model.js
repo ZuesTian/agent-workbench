@@ -1,4 +1,5 @@
 // Serializable collaboration blueprints; no network, DOM, or agent execution.
+import { acceptanceRules, checkKinds } from './acceptance-model.js';
 export const roleMeta = {
   tutor: {
     name: '导师',
@@ -47,6 +48,7 @@ export function createTeam(template = 'software') {
     name:
       template === 'blank' ? '新的协作方案' : template === 'research' ? '研究协作组' : '产品研发组',
     goal: '',
+    acceptance: [],
     layout: 'horizontal',
     nodes: [],
   };
@@ -174,6 +176,7 @@ export function validateTeam(value) {
     version: 1,
     name: text(value.name, 80, '方案名称', true),
     goal: text(value.goal ?? '', 5000, '任务目标'),
+    acceptance: acceptanceRules(value.acceptance),
     layout: value.layout,
     nodes: value.nodes.map((raw) => {
       if (
@@ -301,6 +304,17 @@ export function taskBrief(team, catalog) {
     '> 本文件是协作任务说明。客户端、模型为规划信息，需在执行端确认后开展工作。',
     '',
   ];
+  if (team.acceptance?.length) {
+    lines.push(
+      '## 文件验收',
+      '',
+      ...team.acceptance.map(
+        (rule) =>
+          `- ${rule.path}：${checkKinds[rule.kind]}${rule.expected ? ' · ' + rule.expected : ''} · ${rule.changed ? '本次新增或内容变化' : '允许已有文件'}`,
+      ),
+      '',
+    );
+  }
   for (const node of team.nodes) {
     const parent = team.nodes.find((item) => item.id === node.parentId);
     const agent = catalog.agents.find((item) => item.id === node.agentId);
@@ -332,6 +346,7 @@ export const editor = {
   team: createTeam(),
   selected: null,
   dirty: false,
+  draftSaved: true,
   viewport: { x: 40, y: 40, zoom: 1, userSet: true },
   preview: null,
   inspectorTab: 'config',
@@ -359,9 +374,11 @@ export function storeTeamDraft() {
       'awb-team-draft-v1',
       JSON.stringify({ team: editor.team, dirty: editor.dirty, selected: editor.selected }),
     );
+    editor.draftSaved = true;
     return true;
   } catch {
     /* Explicit saving to disk remains available. */
+    editor.draftSaved = false;
     return false;
   }
 }

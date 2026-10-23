@@ -256,8 +256,13 @@ def cursor_workspace_untrusted(message):
 def prepare_command(prefix, record, directory, environment):
     agent = record["agent"]
     if agent == "codex":
-        command = [
-            *prefix, "-a", "never", "exec", "--json", "--color", "never",
+        command = [*prefix, "-a", "never"]
+        if os.name == "nt":
+            # Prefer MXC to avoid legacy sandbox ACL setup across large trees;
+            # Codex retains its supported fallback and the requested policy.
+            command += ["-c", "features.prefer_mxc=true"]
+        command += [
+            "exec", "--json", "--color", "never",
             "--skip-git-repo-check", "--sandbox", record["sandbox"],
             "--cd", record["cwd"], "--output-last-message", str(directory / "result.md"),
         ]
