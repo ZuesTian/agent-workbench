@@ -1,8 +1,8 @@
-# Agent 工坊 1.2.0
+# Agent 工坊 1.0.0
 
-本机 Agent、Skill、MCP 管理与多 Agent 协作编排工具。包含资源盘点与装配、协作画布、真实任务执行、自动调度、多 Agent 会话和 Windows 托盘。1.2.0 新增验收失败后的有限自动返工、断点续跑、任务库与本地数据迁移。执行状态和文件验收结果分别显示，保留每次调用与验收证据。
+本机 Agent、Skill、MCP 管理与多 Agent 协作编排工具。包含资源盘点与装配、协作画布、真实任务执行、自动调度、多 Agent 会话和 Windows 托盘。支持验收失败后的有限自动返工、断点续跑、任务库与本地数据迁移。执行状态和文件验收结果分别显示，保留每次调用与验收证据。
 
-双击 `dist/AgentWorkbench/AgentWorkbench.exe` 启动。免安装目录版的 `_internal` 文件夹需和程序一起保留。分享程序请使用 `AgentWorkbench-1.2.0-Windows.zip`；本版验收记录位于 `releases/1.2.0/verification/README.md`。
+下载 [Windows 免安装包](https://github.com/ZuesTian/agent-workbench/releases/download/v1.0.0/AgentWorkbench-1.0.0-Windows.zip)，完整解压后双击 `AgentWorkbench.exe` 启动。`_internal` 文件夹需和程序一起保留。校验文件与验证摘要见 [1.0.0 发布页](https://github.com/ZuesTian/agent-workbench/releases/tag/v1.0.0)。从源码构建的程序位于 `dist/AgentWorkbench/AgentWorkbench.exe`。
 
 界面由左侧导航、来源或记录列表、主内容区组成，支持明暗主题。窄窗口（≤1180px）将中间列表收起为抽屉，≤820px 使用图标导航。任务与协作可调用本机 Codex CLI、DeepSeek Harness、Zcode 和 Cursor Agent CLI，复用各客户端已有账号与配置。
 
@@ -38,7 +38,7 @@
 6. **流程预演** 只演示交接顺序，审核步骤的“模拟通过 / 模拟打回”不会调用模型，也不会让自动调度打回或重试。切换到 **流程动态** 可查看同一份预演记录；修改目标或节点会重置预演。真实执行请点击 **执行协作**：在 **自动调度** 中选择共同工作目录、权限和每步时限。可为文件验收失败配置有限返工；审核节点的自然语言意见仍由用户判断。
 7. 更多菜单中可导出协作 JSON、导出 Markdown 任务说明，或导入本工具 / NexusMind 案例导出的 JSON。导入先验证编号、上下级循环和字段大小，资源来源无法匹配时保留引用并提示重新绑定。协作方案上限为 100 个节点，导入文件上限为 2 MB。
 
-导出协作 JSON 不嵌入 MCP 配置、认证头、环境变量值或资源来源路径。用户填写的目标、职责、模型和文件验收规则会随方案分享。别人的电脑仍需准备对应资源并重新绑定；分享程序本身请发送根目录的 `AgentWorkbench-1.2.0-Windows.zip`，解压后双击即可启动。
+导出协作 JSON 不嵌入 MCP 配置、认证头、环境变量值或资源来源路径。用户填写的目标、职责、模型和文件验收规则会随方案分享。别人的电脑仍需准备对应资源并重新绑定；分享程序本身请发送根目录的 `AgentWorkbench-1.0.0-Windows.zip`，解压后双击即可启动。
 
 `examples/` 中提供从用户 NexusMind 案例整理的三份可导入方案：`nexusmind-software.team.json`（9 节点）、`nexusmind-marketing.team.json`（6 节点）、`nexusmind-finance.team.json`（6 节点）。保留原案例的职责和模型备注，重新排版以适应新版画布；模型名称仅为原案例文本，不表示已连接或可用。
 
@@ -167,7 +167,7 @@ npm run format:check
 
 界面使用原生 JavaScript 模块，无运行时前端依赖。可选开发格式检查：`npm ci` 后运行 `npm run format:check`。浏览器测试使用 `tests/ui_fixture.py` 的隔离环境与 `tests/browser_review.js`、`tests/browser_teams.js`，写入目标均位于 `.test-artifacts`。
 
-Windows + Edge 的发布冒烟：先完全退出已有工坊，再运行 `python tests/conversations_browser_smoke.py` 和 `python tests/reliability_smoke.py`；打包后分别加 `--exe dist/AgentWorkbench/AgentWorkbench.exe` 重测。会话测试使用可控 CLI 子进程，不调用真实模型；源码覆盖四类协议，发布包覆盖 Codex / Harness / Cursor 的隔离入口。设置环境变量 `AWB_REQUIRE_INTERACTIVE=1` 时，会话冒烟会把“增量渲染、运行中滚动/输入保持、进度、重试、任务列表、复制、轮询暂停”等交互断言作为硬性门槛；CI 的源码检查使用严格模式。CI 配置位于 `.github/workflows/ci.yml`，执行 Python / JavaScript 测试、Ruff 与前端格式检查；远程 CI 需将本仓库推送到 GitHub 后触发。
+Windows + Edge 的发布冒烟：先完全退出已有工坊，再运行 `python tests/conversations_browser_smoke.py` 和 `python tests/reliability_smoke.py`；打包后分别加 `--exe dist/AgentWorkbench/AgentWorkbench.exe` 重测。会话测试使用可控 CLI 子进程，不调用真实模型；源码覆盖四类协议，发布包覆盖 Codex / Harness / Cursor 的隔离入口。设置环境变量 `AWB_REQUIRE_INTERACTIVE=1` 时，会话冒烟会把“增量渲染、运行中滚动/输入保持、进度、重试、任务列表、复制、轮询暂停”等交互断言作为硬性门槛；CI 的源码检查使用严格模式。CI 配置位于 `.github/workflows/ci.yml`，执行 Python / JavaScript 测试、Ruff 与前端格式检查；推送和 Pull Request 会触发 GitHub Actions 检查。
 
 构建 Windows 免安装目录版（需 PyInstaller 与 Pillow）：
 

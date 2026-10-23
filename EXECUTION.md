@@ -1,6 +1,6 @@
 # 执行任务与自动调度
 
-Agent 工坊 1.2.0 支持真实执行、自动调度、多 Agent 会话与 Windows 托盘，本机数据默认保存在 `%LOCALAPPDATA%\AgentWorkbench`，可在设置中校验迁移到空目录，资源发现、装配、备份和协作方案统一管理。
+Agent 工坊 1.0.0 支持真实执行、自动调度、多 Agent 会话与 Windows 托盘，本机数据默认保存在 `%LOCALAPPDATA%\AgentWorkbench`，可在设置中校验迁移到空目录，资源发现、装配、备份和协作方案统一管理。
 
 ## 单个任务
 
@@ -109,7 +109,7 @@ Windows CI 显式运行 Python、JavaScript、固定版本 Ruff、格式检查�
 执行适配依据本机 CLI 帮助、已安装客户端的协议实现、Harness headless 文档及 [OpenAI 非交互模式文档](https://learn.chatgpt.com/docs/non-interactive-mode)。客户端升级后若协议变化，应重新运行集成验证。既有 MCP 的全部连通性不在本次验证范围内。
 
 
-## 1.2.0 恢复与管理接口
+## 1.0.0 恢复与管理接口
 
 - `POST /api/workflows/start` 接受 `max_reworks`（整数 0–3，默认 0）及 `rework_node_id`；启用时要求 `permission=edit` 和至少一项文件规则。返工节点属于启动快照，参数不能在续跑时扩额。
 - `POST /api/workflows/resume` 使用原 `id` 和新的 `request_id`。同一续跑请求重复提交返回原结果；复用已成功执行及交接，未完成步骤保留 `attempts` 并换新 `run_id`。预算按返工调用累计，崩溃前预占但未能确认启动的一次也计入上限。`resumptions`、`acceptance_history` 和 `rework_calls` 随记录落盘。

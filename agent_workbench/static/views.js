@@ -35,7 +35,7 @@ function ensureShell() {
       <button class="sidebar-search" data-action="focus-search">${icon('search')}<span>搜索资源</span><kbd>Ctrl K</kbd></button>
       <nav id="navigation"></nav>
       <div class="sidebar-footer"><p><span class="local-dot"></span><span id="desktop-state">本地运行</span></p><p>关闭窗口后仍在后台运行；完全退出请右键点开右下角托盘图标。</p>
-        <span class="version">Agent 工坊 · 1.2.0</span></div>
+        <span class="version">Agent 工坊 · 1.0.0</span></div>
     </aside>
     <aside id="context-column" class="context-column" aria-label="当前页面的对象列表"></aside>
     <div class="workspace"><header class="topbar"><div class="breadcrumb">本机工作空间 <span>/</span> <b id="breadcrumb-name"></b></div>
