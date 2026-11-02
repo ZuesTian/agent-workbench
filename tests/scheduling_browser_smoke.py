@@ -57,6 +57,15 @@ def main():
             browser = pw.chromium.launch(channel="msedge", headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1050})
             page.on("pageerror", lambda error: errors.append(str(error)))
+            pending, failed = set(), []
+            page.on("request", lambda request: pending.add(request.url))
+            page.on("requestfinished", lambda request: pending.discard(request.url))
+
+            def request_failed(request):
+                pending.discard(request.url)
+                failed.append({"url": request.url, "error": request.failure})
+
+            page.on("requestfailed", request_failed)
             page.add_init_script(
                 "localStorage.setItem('awb-team-draft-v1', " + json.dumps(json.dumps({
                     "team": request["team"], "dirty": True,
@@ -68,7 +77,8 @@ def main():
             try:
                 page.locator('.nav-button[data-tab="execution"]').click()
             except Exception:
-                summary.update(browser_errors=errors, startup_body=page.locator('body').inner_text())
+                summary.update(browser_errors=errors, startup_body=page.locator('body').inner_text(),
+                               pending_requests=sorted(pending), failed_requests=failed)
                 print(json.dumps({"browser_startup_failure": summary}, ensure_ascii=False), flush=True)
                 page.screenshot(path=str(root / "startup-failure.png"), full_page=True)
                 raise

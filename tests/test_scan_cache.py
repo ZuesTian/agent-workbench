@@ -1,7 +1,9 @@
 import json
 import os
+import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,19 @@ from agent_workbench import adapters, discovery
 from agent_workbench.catalog import Catalog
 from agent_workbench.engine import Engine
 from agent_workbench.service import WorkbenchService
+from agent_workbench.server import WorkbenchServer
+
+
+def test_startup_accepts_a_browser_connection_burst(tmp_path):
+    catalog = Catalog(tmp_path / "home", tmp_path / "roaming", tmp_path / "data", system_scan=False)
+    server = WorkbenchServer(("127.0.0.1", 0), catalog, "fixture-only")
+    try:
+        # Hold the dispatcher to model requests arriving before it gets CPU.
+        with ExitStack() as connections:
+            for _ in range(16):
+                connections.enter_context(socket.create_connection(server.server_address, timeout=1))
+    finally:
+        server.server_close()
 
 
 def write(path, value):

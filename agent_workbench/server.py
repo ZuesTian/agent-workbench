@@ -19,6 +19,8 @@ class WorkbenchServer(ThreadingHTTPServer):
     # server_close waits for accepted requests, including in-flight transactions.
     daemon_threads = False
     allow_reuse_address = False
+    # Module and API requests arrive together while the first page is loading.
+    request_queue_size = 64
 
     def __init__(self, address, catalog=None, token=None):
         self.catalog = catalog or Catalog()

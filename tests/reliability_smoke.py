@@ -119,10 +119,28 @@ def main():
                 browser = api.chromium.launch(channel="msedge", headless=True)
                 page = browser.new_page(viewport={"width": 1440, "height": 1000})
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                page.goto(base + "/#token=" + info["token"])
-                expect(
-                    page.get_by_role("heading", name="你的 Agent 工作空间")
-                ).to_be_visible(timeout=45000)
+                pending, failed = set(), []
+                page.on("request", lambda request: pending.add(request.url))
+                page.on("requestfinished", lambda request: pending.discard(request.url))
+
+                def request_failed(request):
+                    pending.discard(request.url)
+                    failed.append({"url": request.url, "error": request.failure})
+
+                page.on("requestfailed", request_failed)
+                try:
+                    page.goto(base + "/#token=" + info["token"])
+                    expect(
+                        page.get_by_role("heading", name="你的 Agent 工作空间")
+                    ).to_be_visible(timeout=45000)
+                except Exception:
+                    result["browser_startup_failure"] = {
+                        "browser_errors": errors, "pending_requests": sorted(pending),
+                        "failed_requests": failed, "body": page.locator("body").inner_text(),
+                    }
+                    print(json.dumps(result, ensure_ascii=False), flush=True)
+                    page.screenshot(path=str(fixture / "startup-failure.png"), full_page=True)
+                    raise
                 page.locator('[data-ctx="agent"][data-value="cline"]').click(timeout=45000)
                 page.locator('[data-assemble="cline"]').click()
                 page.locator('.nav-button[data-tab="mcps"]').click()
