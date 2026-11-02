@@ -25,6 +25,71 @@ def portable(catalog, root):
     catalog.settings["install_roots"] = [str(root)]
 
 
+def isolated_installation_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "registry_records", lambda: [])
+    monkeypatch.setattr(discovery, "process_paths", lambda: [])
+    monkeypatch.setattr(discovery, "fixed_drives", lambda: [])
+    monkeypatch.setattr(discovery, "installation_bases", lambda home: [])
+    monkeypatch.setattr(discovery, "npm_prefixes", lambda home, roaming: [])
+    monkeypatch.setattr(discovery.shutil, "which", lambda name: None)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+
+@pytest.mark.parametrize("source", ["registry_records", "process_paths", "fixed_drives"])
+def test_unavailable_installation_source_keeps_other_evidence(tmp_path, monkeypatch, source):
+    isolated_installation_sources(tmp_path, monkeypatch)
+    exe = write(tmp_path / "portable/ZCode.exe")
+
+    def fail():
+        raise OSError("PRIVATE_ERROR_DETAIL")
+
+    monkeypatch.setattr(discovery, source, fail)
+    found, report = discovery.probe_installations(tmp_path / "home", tmp_path / "roaming", [exe.parent])
+    assert Path(found["zcode"][0]["path"]) == exe
+    assert any("继续检查" in issue for issue in report["issues"])
+    assert "PRIVATE_ERROR_DETAIL" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("operation", ["is_file", "resolve"])
+def test_inaccessible_program_path_does_not_drop_healthy_client(tmp_path, monkeypatch, operation):
+    isolated_installation_sources(tmp_path, monkeypatch)
+    broken = write(tmp_path / "broken/ZCode.exe")
+    healthy = write(tmp_path / "healthy/Cursor.exe")
+    monkeypatch.setattr(discovery, "registry_records", lambda: [
+        {"DisplayName": "ZCode", "InstallLocation": str(broken.parent)},
+        {"DisplayName": "Cursor", "InstallLocation": str(healthy.parent)},
+    ])
+    original = getattr(Path, operation)
+
+    def check(path, *args, **kwargs):
+        if path == broken:
+            raise OSError(22, "fixture path cannot be accessed", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, operation, check)
+    found, report = discovery.probe_installations(tmp_path / "home", tmp_path / "roaming")
+    assert set(found) == {"cursor"}
+    assert Path(found["cursor"][0]["path"]) == healthy
+    assert any(str(broken).casefold() in issue.casefold() for issue in report["issues"])
+
+
+def test_unreadable_harness_profile_directory_keeps_other_agents(tmp_path, monkeypatch):
+    c = catalog(tmp_path)
+    write(c.home / ".codex/config.toml", 'model = "fixture"')
+    original = Path.glob
+
+    def glob(path, pattern, *args, **kwargs):
+        if path == c.home / ".dsh/profiles":
+            raise OSError("PRIVATE_ERROR_DETAIL")
+        return original(path, pattern, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", glob)
+    view = c.scan()
+    assert any(agent["id"] == "codex" for agent in view["agents"])
+    assert any("Harness 配置目录" in issue for issue in view["issues"])
+    assert c.scan_status()["ready"] and not c.scan_status()["error"]
+
+
 def test_leftover_is_kept_as_source_but_not_counted_as_program(tmp_path):
     c = catalog(tmp_path)
     write(c.home / ".cursor/mcp.json", '{"mcpServers":{"old":{"command":"python"}}}')

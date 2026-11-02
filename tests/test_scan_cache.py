@@ -261,12 +261,48 @@ def test_failed_background_scan_keeps_cache_and_can_retry(tmp_path, monkeypatch)
     assert result["counts"] == expected["counts"]
     assert "扫描未完成" in result["scan"]["error"]
     assert "PRIVATE_ERROR_DETAIL" not in json.dumps(result)
+    diagnostic = json.loads((c.data / "cache/scan-error.json").read_text(encoding="utf-8"))
+    assert diagnostic["type"] == "OSError"
+    assert diagnostic["frames"][-1]["function"] == "fail"
+    assert "PRIVATE_ERROR_DETAIL" not in json.dumps(diagnostic)
     monkeypatch.setattr(c, "_scan", original)
     c.start_scan()
     c._refresh_thread.join(2)
     assert c.view()["scan"]["ready"]
     assert c.view()["scan"]["error"] is None
     c.close()
+
+
+def test_installation_probe_failure_still_returns_configuration_resources(tmp_path, monkeypatch):
+    c = fixture_catalog(tmp_path)
+
+    def fail(**kwargs):
+        raise OSError("PRIVATE_ERROR_DETAIL")
+
+    monkeypatch.setattr(c, "discover_installations", fail)
+    view = c.scan()
+    assert view["counts"]["agents"] >= 2 and view["counts"]["skills"] > 0
+    assert any("继续盘点已有客户端配置" in issue for issue in view["issues"])
+    assert "PRIVATE_ERROR_DETAIL" not in json.dumps(view)
+    assert c.scan_status()["ready"] and not c.scan_status()["error"]
+
+
+@pytest.mark.parametrize("operation", ["is_file", "is_dir", "exists"])
+def test_one_unreadable_resource_path_keeps_other_agents(tmp_path, monkeypatch, operation):
+    c = fixture_catalog(tmp_path)
+    broken = c.home / ".codex/config.toml" if operation != "is_dir" else c.home / ".claude/skills"
+    original = getattr(Path, operation)
+
+    def check(path, *args, **kwargs):
+        if path == broken:
+            raise OSError(22, "fixture path cannot be accessed", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, operation, check)
+    view = c.scan()
+    assert any(agent["id"] == "claude" for agent in view["agents"])
+    assert any(str(broken) in issue for issue in view["issues"])
+    assert c.scan_status()["ready"] and not c.scan_status()["error"]
 
 
 def test_same_size_same_mtime_edits_and_deletions_are_seen(tmp_path):

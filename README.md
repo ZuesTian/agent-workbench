@@ -1,10 +1,10 @@
-# Agent 工坊 1.0.1
+# Agent 工坊 1.0.2
 
 本机 Agent、Skill、MCP 管理与多 Agent 协作编排工具。包含资源盘点与装配、协作画布、真实任务执行、自动调度、多 Agent 会话和 Windows 托盘。支持验收失败后的有限自动返工、断点续跑、任务库与本地数据迁移。执行状态和文件验收结果分别显示，保留每次调用与验收证据。
 
-下载 [Windows EXE 安装包](https://github.com/ZuesTian/agent-workbench/releases/download/v1.0.1/AgentWorkbench-1.0.1-Setup.exe)，双击按向导安装。也可下载 [Windows 免安装包](https://github.com/ZuesTian/agent-workbench/releases/download/v1.0.1/AgentWorkbench-1.0.1-Windows.zip)，完整解压后双击 `AgentWorkbench.exe` 启动。`_internal` 文件夹需和程序一起保留。校验文件与验证摘要见 [1.0.1 发布页](https://github.com/ZuesTian/agent-workbench/releases/tag/v1.0.1)。从源码构建的程序位于 `dist/AgentWorkbench/AgentWorkbench.exe`。
+下载 [Windows EXE 安装包](https://github.com/ZuesTian/agent-workbench/releases/download/v1.0.2/AgentWorkbench-1.0.2-Setup.exe)，双击按向导安装。也可下载 [Windows 免安装包](https://github.com/ZuesTian/agent-workbench/releases/download/v1.0.2/AgentWorkbench-1.0.2-Windows.zip)，完整解压后双击 `AgentWorkbench.exe` 启动。`_internal` 文件夹需和程序一起保留。校验文件与验证摘要见 [1.0.2 发布页](https://github.com/ZuesTian/agent-workbench/releases/tag/v1.0.2)。从源码构建的程序位于 `dist/AgentWorkbench/AgentWorkbench.exe`。
 
-`AgentWorkbench-1.0.1-Setup.exe` 安装向导支持简体中文和英文、开始菜单入口与可选桌面快捷方式。默认安装到当前用户的本地应用目录，无需管理员权限；可在 Windows 设置中卸载，客户端配置与工坊数据保留。升级或卸载前请在托盘中完全退出工坊。
+`AgentWorkbench-1.0.2-Setup.exe` 安装向导支持简体中文和英文、开始菜单入口与可选桌面快捷方式。默认安装到当前用户的本地应用目录，无需管理员权限；可在 Windows 设置中卸载，客户端配置与工坊数据保留。升级或卸载前请在托盘中完全退出工坊。
 
 界面由左侧导航、来源或记录列表、主内容区组成，支持明暗主题。窄窗口（≤1180px）将中间列表收起为抽屉，≤820px 使用图标导航。任务与协作可调用本机 Codex CLI、DeepSeek Harness、Zcode 和 Cursor Agent CLI，复用各客户端已有账号与配置。
 
@@ -21,6 +21,8 @@
 通过 npm 安装的客户端支持 `NPM_CONFIG_PREFIX`、用户 `.npmrc` 中的 `prefix`、PATH 所在目录以及当前用户的默认 npm 目录，并读取包内实际声明的启动文件。Node.js、Git Bash 和 Edge 也根据当前安装环境定位；不需要沿用其他电脑的 `C:`、`D:` 或用户目录。配置盘点跟随 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME`、`OPENCODE_CONFIG` 和 `OPENCODE_CONFIG_DIR`；修改配置目录后重新启动工坊，旧目录的显示缓存不会覆盖新设置。Claude 与 OpenCode 的目录选项见[Claude 环境变量](https://code.claude.com/docs/en/env-vars)和[OpenCode 配置](https://docs.opencode.ai/docs/config/)。
 
 安装、卸载或移动程序后点击“重新扫描”。自行选择的外部项目目录与历史任务保存的工作目录仍指向原项目；如果文件已移走，需要选择实际的新目录，程序不会凭同名目录替换任务目标。便携程序位于系统安装记录和常用目录以外时，可用“添加程序目录”补充查找范围。
+
+个别安装来源或资源路径暂时无法访问时，会跳过该项并继续显示其他可用资源，具体问题列在扫描记录中。整体扫描异常时，本机数据目录的 `cache/scan-error.json` 会记录错误类型、系统错误码和代码位置，便于排查。
 
 启动缓存位于本机数据目录的 `cache/catalog.json`，只保存界面可见的资源摘要，不保存原始 MCP 凭据、命令参数值或 Skill 正文。缓存损坏、格式不匹配或扫描目录设置变化时会重新扫描。预览装配仍使用本次读取的配置，应用和恢复仍核对实际文件；显示缓存不参与写入授权。扫描失败时保留已有显示结果，并提供重试入口。
 
@@ -48,7 +50,7 @@
 6. **流程预演** 只演示交接顺序，审核步骤的“模拟通过 / 模拟打回”不会调用模型，也不会让自动调度打回或重试。切换到 **流程动态** 可查看同一份预演记录；修改目标或节点会重置预演。真实执行请点击 **执行协作**：在 **自动调度** 中选择共同工作目录、权限和每步时限。可为文件验收失败配置有限返工；审核节点的自然语言意见仍由用户判断。
 7. 更多菜单中可导出协作 JSON、导出 Markdown 任务说明，或导入本工具 / NexusMind 案例导出的 JSON。导入先验证编号、上下级循环和字段大小，资源来源无法匹配时保留引用并提示重新绑定。协作方案上限为 100 个节点，导入文件上限为 2 MB。
 
-导出协作 JSON 不嵌入 MCP 配置、认证头、环境变量值或资源来源路径。用户填写的目标、职责、模型和文件验收规则会随方案分享。别人的电脑仍需准备对应资源并重新绑定；分享程序本身请发送根目录的 `AgentWorkbench-1.0.1-Windows.zip`，解压后双击即可启动。
+导出协作 JSON 不嵌入 MCP 配置、认证头、环境变量值或资源来源路径。用户填写的目标、职责、模型和文件验收规则会随方案分享。别人的电脑仍需准备对应资源并重新绑定；分享程序本身请发送根目录的 `AgentWorkbench-1.0.2-Windows.zip`，解压后双击即可启动。
 
 `examples/` 中提供从用户 NexusMind 案例整理的三份可导入方案：`nexusmind-software.team.json`（9 节点）、`nexusmind-marketing.team.json`（6 节点）、`nexusmind-finance.team.json`（6 节点）。保留原案例的职责和模型备注，重新排版以适应新版画布；模型名称仅为原案例文本，不表示已连接或可用。
 
@@ -188,10 +190,10 @@ python build_windows.py
 需要 EXE 安装向导时，安装 [Inno Setup 6.7+ 或 7](https://jrsoftware.org/isdl.php)，在上述构建完成后运行（编译器不在 PATH 时填写其实际路径）：
 
 ```text
-ISCC.exe /DAppVersion=1.0.1 packaging/windows-installer.iss
+ISCC.exe /DAppVersion=1.0.2 packaging/windows-installer.iss
 ```
 
-安装程序输出到项目根目录的 `AgentWorkbench-1.0.1-Setup.exe`，仅收录 `dist/AgentWorkbench` 中的分发文件，不包含测试产物、开发依赖或本机用户配置。
+安装程序输出到项目根目录的 `AgentWorkbench-1.0.2-Setup.exe`，仅收录 `dist/AgentWorkbench` 中的分发文件，不包含测试产物、开发依赖或本机用户配置。
 
 源代码职责：
 

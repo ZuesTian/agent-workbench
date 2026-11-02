@@ -1,5 +1,5 @@
 ; Build after python build_windows.py with Inno Setup 6.7+ or 7:
-; ISCC.exe /DAppVersion=1.0.1 packaging/windows-installer.iss
+; ISCC.exe /DAppVersion=1.0.2 packaging/windows-installer.iss
 #ifndef AppVersion
   #error Specify /DAppVersion to match the packaged application.
 #endif

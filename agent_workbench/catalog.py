@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import traceback
 from time import perf_counter
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -197,6 +198,7 @@ class Catalog:
                 self.skills, self.mcps, self.roles, self.agents, self.snapshot = (
                     previous
                 )
+                self._record_scan_error(exc)
                 with self._status_lock:
                     self._scan_state = {
                         **self._scan_state,
@@ -210,6 +212,23 @@ class Catalog:
                         "running": False,
                         "elapsed_seconds": round(perf_counter() - started, 3),
                     }
+
+    def _record_scan_error(self, exc):
+        # Do not persist exception messages or locals: parsers may include secrets.
+        diagnostic = {
+            "at": stamp(), "type": type(exc).__name__,
+            "frames": [
+                {"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
+                for frame in traceback.extract_tb(exc.__traceback__)
+            ],
+        }
+        if isinstance(exc, OSError):
+            diagnostic.update(errno=exc.errno, winerror=getattr(exc, "winerror", None),
+                              filename=str(exc.filename) if exc.filename else None)
+        try:
+            write_json(self.data / "cache/scan-error.json", diagnostic)
+        except (OSError, ValueError):
+            pass
 
     def scan_status(self):
         with self._status_lock:
@@ -303,18 +322,42 @@ class Catalog:
             [],
             [],
         )
-        installations, discovery = self.discover_installations(refresh=True)
+        for agent in self.agents.values():
+            issues.extend(agent.scan_issues)
+        failed_paths = set()
+
+        def path_test(path, method):
+            try:
+                return getattr(path, method)()
+            except OSError:
+                if str(path) not in failed_paths:
+                    failed_paths.add(str(path))
+                    issues.append(f"无法访问资源路径，已跳过：{path}")
+                return False
+
+        try:
+            installations, discovery = self.discover_installations(refresh=True)
+        except OSError as exc:
+            self._record_scan_error(exc)
+            installations = {}
+            discovery = {"roots": [], "issues": ["程序安装信息暂时无法读取；本次继续盘点已有客户端配置。"]}
         issues.extend(discovery["issues"])
         for agent in self.agents.values():
             agent.installations.extend(installations.get(agent.id, []))
-            if not agent.detected:
+            try:
+                detected = agent.detected
+            except OSError:
+                detected = bool(agent.installations) or agent.id.startswith("custom-") or any(
+                    path_test(p, "exists") for p in [agent.config, *agent.extra_configs, *agent.evidence]
+                )
+            if not detected:
                 continue
             status = (
                 "installed"
                 if agent.installations
                 else (
                     "custom"
-                    if agent.id.startswith("custom-") and not agent.config.is_dir()
+                    if agent.id.startswith("custom-") and not path_test(agent.config, "is_dir")
                     else "config_only"
                 )
             )
@@ -336,13 +379,13 @@ class Catalog:
                     for p in dict.fromkeys(
                         [agent.config, *agent.extra_configs, *agent.evidence]
                     )
-                    if p.exists()
+                    if path_test(p, "exists")
                 ],
                 "mcp_writable": agent.mcp_writable,
-                "config_exists": agent.config.is_file(),
+                "config_exists": path_test(agent.config, "is_file"),
                 "error": None,
             }
-            if agent.config.is_dir():
+            if path_test(agent.config, "is_dir"):
                 public["error"] = (
                     "MCP 配置路径指向文件夹；请在设置中移除此接入后，使用具体配置文件重新接入。"
                 )
@@ -357,12 +400,12 @@ class Catalog:
                     packages = (
                         Path(installation["path"]).parent / "resources/glm/packages"
                     )
-                    if packages.is_dir():
+                    if path_test(packages, "is_dir"):
                         roots.append(
                             (packages, agent.id, "随程序提供的插件 / 启用状态未核验")
                         )
             for p in dict.fromkeys([agent.config, *agent.extra_configs]):
-                if not p.is_file():
+                if not path_test(p, "is_file"):
                     continue
                 try:
                     doc, source_hash = self._files.document(p, agent.kind)
@@ -438,7 +481,7 @@ class Catalog:
             roots.append((Path(root), "custom", "自定义目录"))
         roots.append((self.data / "library/skills", "library", "我的资源库"))
         for root, agent_id, label in roots:
-            if not root.is_dir():
+            if not path_test(root, "is_dir"):
                 continue
             for p in self._walk_skills(
                 root, issues, agent_id if "插件" in label else None

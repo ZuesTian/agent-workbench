@@ -185,13 +185,45 @@ def _path_agent(path):
 
 def probe_installations(home, roaming, extra_roots=(), *, system=True):
     found, issues, inspected = {}, [], []
-    running = {str(p).casefold() for p in process_paths()} if system else set()
+    failed_paths = set()
+
+    def source_items(label, loader):
+        try:
+            return list(loader())
+        except OSError:
+            issues.append(f"{label}暂时无法读取；已继续检查其他安装来源。")
+            return []
+
+    def path_test(path, method):
+        try:
+            return getattr(path, method)()
+        except OSError:
+            warn_path(path)
+            return False
+
+    def warn_path(path):
+        key = str(path).casefold()
+        if key not in failed_paths:
+            failed_paths.add(key)
+            issues.append(f"无法访问程序路径，已跳过：{path}")
+
+    def matches(root, pattern):
+        try:
+            yield from root.glob(pattern)
+        except OSError:
+            warn_path(root)
+
+    running = {str(p).casefold() for p in source_items("运行中程序信息", process_paths)} if system else set()
 
     def add(agent_id, path, source, kind="executable"):
-        if not path.is_file():
+        if not path_test(path, "is_file"):
+            return
+        try:
+            canonical = str(path.resolve())
+        except OSError:
+            warn_path(path)
             return
         records = found.setdefault(agent_id, [])
-        canonical = str(path.resolve())
         for existing in records:
             if existing["path"].casefold() == canonical.casefold():
                 if kind == "cli":
@@ -207,7 +239,7 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
         )
 
     if system:
-        for record in registry_records():
+        for record in source_items("Windows 安装记录", registry_records):
             title = str(record.get("DisplayName", ""))
             # Prefer specific names (Trae CN / Claude Code) over their families.
             candidates = sorted(PROGRAMS, key=lambda k: -len(PROGRAMS[k][0]))
@@ -243,7 +275,7 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
                 add(agent_id, path, "运行中程序路径")
         local = local_appdata(home)
         bases = installation_bases(home)
-        for drive in fixed_drives():
+        for drive in source_items("磁盘列表", fixed_drives):
             bases.extend(
                 drive / name
                 for name in (
@@ -256,18 +288,22 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
                 )
             )
         bases = list(unique_paths(bases))
-        inspected = [str(p) for p in bases if p.is_dir()]
+        inspected = [str(p) for p in bases if path_test(p, "is_dir")]
         for agent_id, (_, names, folders) in PROGRAMS.items():
             for name in names:
-                path = shutil.which(name)
+                try:
+                    path = shutil.which(name)
+                except OSError:
+                    issues.append(f"PATH 中的 {name} 暂时无法检查；已继续检查其他安装来源。")
+                    path = None
                 if path:
                     add(agent_id, Path(path), "PATH", "cli" if name in {"codex.exe", "dsh.exe", "cursor-agent.exe"} else "executable")
                 for base in bases:
                     for folder in folders:
                         add(agent_id, base / folder / name, "常用安装目录")
-        for path in (local / "OpenAI/Codex/bin").glob("*/codex.exe"):
+        for path in matches(local / "OpenAI/Codex/bin", "*/codex.exe"):
             add("codex", path, "Codex 安装目录", "cli")
-        for path in (local / "AnthropicClaude").glob("*/claude.exe"):
+        for path in matches(local / "AnthropicClaude", "*/claude.exe"):
             add("claude-desktop", path, "桌面程序目录")
         prefixes = npm_prefixes(home, roaming)
         for name, package, command, script in (
@@ -280,8 +316,8 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
         ):
             for path in npm_entrypoints(package, command, script, prefixes=prefixes):
                 add(name, path, "npm 启动入口", "entry")
-        for path in (local / "cursor-agent/versions").glob("*/index.js"):
-            if (path.parent / "node.exe").is_file() and re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}(?:-\d{2}-\d{2}-\d{2})?-[a-f0-9]+", path.parent.name):
+        for path in matches(local / "cursor-agent/versions", "*/index.js"):
+            if path_test(path.parent / "node.exe", "is_file") and re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}(?:-\d{2}-\d{2}-\d{2})?-[a-f0-9]+", path.parent.name):
                 add("cursor", path, "Cursor CLI 安装目录", "entry")
         add("claude", home / ".local/bin/claude.exe", "用户启动入口")
         for base in (home / ".vscode/extensions", home / ".cursor/extensions"):
@@ -289,7 +325,7 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
                 ("cline", "saoudrizwan.claude-dev-"),
                 ("roo", "rooveterinaryinc.roo-cline-"),
             ):
-                for path in base.glob(prefix + "*/package.json"):
+                for path in matches(base, prefix + "*/package.json"):
                     try:
                         manifest = json.loads(path.read_text(encoding="utf-8"))
                         main = manifest.get("main")
@@ -307,7 +343,7 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
     for root in extra_roots:
         root = Path(root)
         inspected.append(str(root))
-        if not root.is_dir():
+        if not path_test(root, "is_dir"):
             issues.append(f"程序查找目录不存在：{root}")
             continue
         queue, seen, count = deque([(root, 0)]), set(), 0

@@ -31,6 +31,7 @@ class Agent:
     note: str = ""
     installations: list[dict] = field(default_factory=list)
     mcp_writable: bool = True
+    scan_issues: list[str] = field(default_factory=list)
 
     @property
     def config_detected(self):
@@ -60,6 +61,12 @@ def discover_agents(home: Path, roaming: Path, custom: list[dict], *, environmen
     opencode = xdg / "opencode"
     opencode_custom = environment_path("OPENCODE_CONFIG_DIR", opencode, environment=environment, home=h)
     opencode_file = environment_path("OPENCODE_CONFIG", environment=environment, home=h)
+    harness_issues = []
+    try:
+        harness_configs = sorted((h / ".dsh/profiles").glob("*/cordis*.yml"))
+    except OSError:
+        harness_configs = []
+        harness_issues.append("Harness 配置目录暂时无法读取；已继续检查其他客户端。")
     agents = [
         Agent(
             "codex",
@@ -201,10 +208,11 @@ def discover_agents(home: Path, roaming: Path, custom: list[dict], *, environmen
             "dsh",
             skills=h / ".dsh/skills",
             evidence=[h / ".dsh"],
-            extra_configs=sorted((h / ".dsh/profiles").glob("*/cordis*.yml")),
+            extra_configs=harness_configs,
             skill_roots=[h / ".agents/skills"],
             note="支持 Skill 装配；MCP 仅盘点 Cordis 文件中的静态定义，不求值脚本、不推断最终启用状态。MCP 修改请在 Harness 中完成。",
             mcp_writable=False,
+            scan_issues=harness_issues,
         ),
         Agent(
             "zcode",
