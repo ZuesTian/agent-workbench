@@ -65,7 +65,13 @@ def main():
                 })) + ");"
             )
             page.goto(f"http://127.0.0.1:{server.server_port}/#token={token}")
-            page.locator('.nav-button[data-tab="execution"]').click()
+            try:
+                page.locator('.nav-button[data-tab="execution"]').click()
+            except Exception:
+                summary.update(browser_errors=errors, startup_body=page.locator('body').inner_text())
+                print(json.dumps({"browser_startup_failure": summary}, ensure_ascii=False), flush=True)
+                page.screenshot(path=str(root / "startup-failure.png"), full_page=True)
+                raise
             page.locator("#execution-agent option[value=zcode]").wait_for(state="attached")
             page.locator("#execution-agent").select_option("zcode")
             assert page.locator("#execution-sandbox").input_value() == "plan"
