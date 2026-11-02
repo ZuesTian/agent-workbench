@@ -56,7 +56,7 @@ class WorkbenchService:
         self.engine = Engine(catalog)
         self.profiles = Profiles(catalog.data)
         self.teams = Teams(catalog.data)
-        self.runs = ExecutionManager(catalog.data)
+        self.runs = ExecutionManager(catalog.data, installation_provider=catalog.execution_installations)
         self.workflows = WorkflowManager(catalog.data, self.runs)
         self.conversations = ConversationManager(catalog.data, self.runs)
         self.operations = {
@@ -296,7 +296,8 @@ class WorkbenchService:
         if skills and not Path(skills).is_absolute():
             raise ValueError("Skill 目录必须是绝对路径")
         agents = discover_agents(
-            self.catalog.home, self.catalog.roaming, self.catalog.settings["agents"]
+            self.catalog.home, self.catalog.roaming, self.catalog.settings["agents"],
+            environment=self.catalog.path_environment(),
         )
         if any(a.config.resolve() == config.resolve() for a in agents):
             raise ValueError("此配置已由现有 Agent 接入")

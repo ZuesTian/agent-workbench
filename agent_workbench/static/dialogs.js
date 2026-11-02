@@ -47,14 +47,14 @@ export function addMcpDialog() {
 export function importSkillDialog() {
   showModal(
     '导入本地 Skill',
-    `${formField('包含 SKILL.md 的目录', 'skill-path', 'C:\\Users\\你\\my-skills\\my-skill')}${directoryExtras('skill-path')}<div class="notice info">会完整复制该 Skill 目录到工坊资源库，包含脚本与参考文件。也可在设置中添加目录，直接盘点现有文件。</div>`,
+    `${formField('包含 SKILL.md 的目录', 'skill-path', '选择或输入本机的 Skill 文件夹')}${directoryExtras('skill-path')}<div class="notice info">会完整复制该 Skill 目录到工坊资源库，包含脚本与参考文件。也可在设置中添加目录，直接盘点现有文件。</div>`,
     '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-import-skill">导入 Skill</button>',
   );
 }
 export function rootDialog() {
   showModal(
     '添加 Skill 扫描目录',
-    formField('目录的绝对路径', 'root-path', 'D:\\Projects\\my-skills') +
+    formField('目录的绝对路径', 'root-path', '选择或输入本机的 Skill 库目录') +
       directoryExtras('root-path'),
     '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-root">添加并扫描</button>',
   );
@@ -62,14 +62,14 @@ export function rootDialog() {
 export function installRootDialog() {
   showModal(
     '添加程序查找目录',
-    `${formField('程序所在目录（绝对路径）', 'install-root-path', 'G:\\\\Zcode')}${directoryExtras('install-root-path')}<p class="subheading">查找已支持客户端的程序文件，最多向下三层。Skill 库请使用设置里的「额外的 Skill 目录」。</p>`,
+    `${formField('程序所在目录（绝对路径）', 'install-root-path', '选择或输入本机的程序安装目录')}${directoryExtras('install-root-path')}<p class="subheading">查找已支持客户端的程序文件，最多向下三层。Skill 库请使用设置里的「额外的 Skill 目录」。</p>`,
     '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-install-root">添加并扫描</button>',
   );
 }
 export function agentDialog() {
   showModal(
     '接入自定义 Agent',
-    `${formField('Agent 名称', 'agent-name', '例如：我的本地助手')}${formField('MCP 配置文件（绝对路径）', 'agent-config', 'C:\\Users\\你\\.myagent\\mcp.json')}<div class="form-row"><label class="field">配置格式<select id="agent-kind"><option value="json">通用 JSON</option><option value="codex">Codex TOML</option><option value="opencode">OpenCode JSON</option><option value="vscode">VS Code JSON</option><option value="gemini">Gemini JSON</option></select></label>${formField('MCP 所在的根字段', 'agent-key', '', 'mcpServers')}</div>${formField('Skill 安装目录（可选）', 'agent-skills', 'C:\\Users\\你\\.myagent\\skills')}<p class="subheading">配置文件尚不存在时，其父目录需已存在；字段由目标软件的规范决定。</p>`,
+    `${formField('Agent 名称', 'agent-name', '例如：我的本地助手')}${formField('MCP 配置文件（绝对路径）', 'agent-config', '输入该客户端实际使用的配置文件路径')}<div class="form-row"><label class="field">配置格式<select id="agent-kind"><option value="json">通用 JSON</option><option value="codex">Codex TOML</option><option value="opencode">OpenCode JSON</option><option value="vscode">VS Code JSON</option><option value="gemini">Gemini JSON</option></select></label>${formField('MCP 所在的根字段', 'agent-key', '', 'mcpServers')}</div>${formField('Skill 安装目录（可选）', 'agent-skills', '输入该客户端实际使用的 Skill 目录')}<p class="subheading">配置文件尚不存在时，其父目录需已存在；字段由目标软件的规范决定。</p>`,
     '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-agent">接入并扫描</button>',
   );
 }

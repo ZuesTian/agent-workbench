@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 from .dsh import LiteralLoader
+from .locations import environment_path
 
 
 def read_json(path):
@@ -43,7 +44,7 @@ def model_row(ident, name=None, provider=""):
 
 
 def codex_models(environment):
-    home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
+    home = environment_path("CODEX_HOME", Path.home() / ".codex", environment=environment)
     config_path = home / "config.toml"
     config = tomllib.loads(config_path.read_text(encoding="utf-8-sig")) if config_path.exists() else {}
     profile = config.get("profiles", {}).get(config.get("profile"), {})

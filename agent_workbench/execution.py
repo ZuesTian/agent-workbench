@@ -6,7 +6,6 @@ import copy
 import json
 import logging
 import os
-import shutil
 import subprocess
 import threading
 import time
@@ -16,6 +15,7 @@ from .execution_process import ProcessTree
 from .runners import (
     RunnerRegistry, RUNNERS, prepare_command, decode_event, execution_environment,
     cursor_workspace_untrusted, run_mode,
+    codex_command,
 )
 from .storage import read_json, record_directory, record_roots, stamp, write_json
 from .validation import identifier, text
@@ -85,26 +85,6 @@ def read_stream_records(stream, limit=EVENT_LIMIT):
             raise OutputTooLarge("单条输出超过 8 MB，已停止解析")
 
 
-def codex_command() -> list[str] | None:
-    """Resolve an executable, never run a user-supplied command or shell text."""
-    candidate = shutil.which("codex.exe" if os.name == "nt" else "codex")
-    if candidate and Path(candidate).is_file():
-        return [str(Path(candidate).resolve())]
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-    candidates = list((local / "OpenAI/Codex/bin").glob("*/codex.exe"))
-    if candidates:
-        latest = max(candidates, key=lambda p: p.stat().st_mtime)
-        return [str(latest.resolve())]
-    # npm installations can expose a .cmd shim; invoke its packaged JS through
-    # Node directly instead of handing user text to cmd.exe.
-    roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
-    script = roaming / "npm/node_modules/@openai/codex/bin/codex.js"
-    node = shutil.which("node")
-    if node and script.is_file():
-        return [str(Path(node).resolve()), str(script)]
-    return None
-
-
 def event_text(event):
     kind = str(event.get("type") or "")
     item = event.get("item") or {}
@@ -160,10 +140,10 @@ def _failed_for_workspace_trust(existing):
 
 
 class ExecutionManager:
-    def __init__(self, data: Path, resolver=codex_command, *, registry=None):
+    def __init__(self, data: Path, resolver=codex_command, *, registry=None, installation_provider=None):
         self.root = data.resolve() / "runs"
         self.record_roots = record_roots(self.root)
-        self.registry = registry or RunnerRegistry(resolver)
+        self.registry = registry or RunnerRegistry(resolver, installation_provider=installation_provider)
         self.lock = threading.RLock()
         self.active = None
         self.worker = None

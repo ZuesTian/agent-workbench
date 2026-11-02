@@ -11,6 +11,8 @@ from pathlib import Path
 import json5
 import tomlkit
 
+from .locations import environment_path, unique_paths
+
 
 @dataclass
 class Agent:
@@ -47,33 +49,42 @@ class Agent:
         )
 
 
-def discover_agents(home: Path, roaming: Path, custom: list[dict]) -> list[Agent]:
+def discover_agents(home: Path, roaming: Path, custom: list[dict], *, environment=None) -> list[Agent]:
     h, a = home, roaming
+    environment = {} if environment is None else environment
+    codex = environment_path("CODEX_HOME", h / ".codex", environment=environment, home=h)
+    claude_override = environment_path("CLAUDE_CONFIG_DIR", environment=environment, home=h)
+    claude = claude_override or h / ".claude"
+    claude_config = claude / ".claude.json" if claude_override is not None else h / ".claude.json"
+    xdg = environment_path("XDG_CONFIG_HOME", h / ".config", environment=environment, home=h)
+    opencode = xdg / "opencode"
+    opencode_custom = environment_path("OPENCODE_CONFIG_DIR", opencode, environment=environment, home=h)
+    opencode_file = environment_path("OPENCODE_CONFIG", environment=environment, home=h)
     agents = [
         Agent(
             "codex",
             "Codex",
             "#476b56",
-            h / ".codex/config.toml",
+            codex / "config.toml",
             "codex",
             "mcp_servers",
             h / ".agents/skills",
-            [h / ".codex"],
-            skill_roots=[h / ".codex/skills", h / ".agents/skills"],
-            plugin_roots=[h / ".codex/plugins/cache"],
-            role_roots=[h / ".codex/agents"],
+            [codex],
+            skill_roots=[codex / "skills", h / ".agents/skills"],
+            plugin_roots=[codex / "plugins/cache"],
+            role_roots=[codex / "agents"],
             note="Skill 默认安装至共享的 .agents/skills；Codex 与 Cursor 等可能共同发现它。",
         ),
         Agent(
             "claude",
             "Claude Code",
             "#b57d57",
-            h / ".claude.json",
-            skills=h / ".claude/skills",
-            evidence=[h / ".claude"],
-            extra_configs=[h / ".claude/settings.json"],
-            plugin_roots=[h / ".claude/plugins/cache"],
-            role_roots=[h / ".claude/agents"],
+            claude_config,
+            skills=claude / "skills",
+            evidence=[claude],
+            extra_configs=[claude / "settings.json"],
+            plugin_roots=[claude / "plugins/cache"],
+            role_roots=[claude / "agents"],
         ),
         Agent(
             "cursor",
@@ -118,13 +129,15 @@ def discover_agents(home: Path, roaming: Path, custom: list[dict]) -> list[Agent
             "opencode",
             "OpenCode",
             "#6576a4",
-            h / ".config/opencode/opencode.json",
+            opencode / "opencode.json",
             "opencode",
             "mcp",
-            h / ".config/opencode/skills",
-            [h / ".config/opencode"],
-            extra_configs=[h / ".config/opencode/opencode.jsonc"],
-            skill_roots=[h / ".agents/skills", h / ".claude/skills"],
+            opencode_custom / "skills",
+            list(unique_paths([opencode, opencode_custom])),
+            extra_configs=list(unique_paths([opencode / "opencode.jsonc", opencode_file,
+                                            opencode_custom / "opencode.json", opencode_custom / "opencode.jsonc"])),
+            skill_roots=list(unique_paths([opencode / "skills", h / ".agents/skills", claude / "skills"])),
+            role_roots=list(unique_paths([opencode / "agents", opencode_custom / "agents"])),
         ),
         Agent(
             "cline",

@@ -61,6 +61,9 @@ def test_registry_other_drive_and_stale_uninstall_record(tmp_path, monkeypatch):
     root = tmp_path / "G"
     exe = write(root / "Zcode/ZCode.exe")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_USERCONFIG", raising=False)
     monkeypatch.setattr(
         discovery,
         "registry_records",

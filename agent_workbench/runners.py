@@ -11,6 +11,10 @@ from pathlib import Path
 
 from .discovery import executable_path, registry_records
 from .model_catalog import ModelCatalog, zcode_model_override
+from .locations import (
+    expanded_path, git_bash_executable, installation_bases, local_appdata,
+    node_executable, npm_entrypoints, unique_paths,
+)
 
 
 def execution_environment():
@@ -26,12 +30,48 @@ def execution_environment():
     return environment
 
 
-def cursor_command():
+def _installed_paths(installations):
+    for item in installations:
+        path = expanded_path(item.get("path"))
+        if path and path.is_file():
+            yield item, path
+
+
+def _script_command(script):
+    if not script.is_file():
+        return None
+    node = node_command(near=list(script.parents)[:5])
+    return [node, str(script.resolve())] if node else None
+
+
+def codex_command(installations=()):
+    binary = shutil.which("codex.exe" if os.name == "nt" else "codex")
+    if binary and Path(binary).is_file():
+        return [str(Path(binary).resolve())]
+    candidates = list((local_appdata() / "OpenAI/Codex/bin").glob("*/codex.exe"))
+    candidates = [path for path in candidates if path.is_file()]
+    if candidates:
+        return [str(max(candidates, key=lambda path: path.stat().st_mtime).resolve())]
+    for script in npm_entrypoints("@openai/codex", "codex", "bin/codex.js"):
+        command = _script_command(script)
+        if command:
+            return command
+    for item, path in _installed_paths(installations):
+        if item.get("kind") == "cli" and path.name.casefold() == "codex.exe":
+            return [str(path.resolve())]
+        if item.get("kind") == "entry":
+            command = _script_command(path)
+            if command:
+                return command
+    return None
+
+
+def cursor_command(installations=()):
     """Resolve Cursor's own launcher, never the unrelated generic 'agent' name."""
     binary = shutil.which("cursor-agent.exe" if os.name == "nt" else "cursor-agent")
     if binary and Path(binary).is_file():
         return [str(Path(binary).resolve())]
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+    local = local_appdata()
     versions = local / "cursor-agent/versions"
     installed = []
     if versions.is_dir():
@@ -42,64 +82,70 @@ def cursor_command():
     if installed:
         _, directory = max(installed, key=lambda item: (item[0], item[1].name))
         return [str((directory / "node.exe").resolve()), str((directory / "index.js").resolve())]
+    for item, path in _installed_paths(installations):
+        if path.name.casefold() == "cursor-agent.exe":
+            return [str(path.resolve())]
+        if item.get("kind") == "entry" and path.name == "index.js" and (path.parent / "node.exe").is_file():
+            return [str((path.parent / "node.exe").resolve()), str(path.resolve())]
     return None
 
 
-def node_command():
-    candidate = shutil.which("node")
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-    path = Path(candidate) if candidate else local / "Programs/nodejs/node.exe"
-    return str(path.resolve()) if path.is_file() else None
+def node_command(near=()):
+    return node_executable(near)
 
 
-def dsh_command():
+def dsh_command(installations=()):
     """Read the installed launcher shim; never execute its shell contents."""
-    node = node_command()
-    if not node:
-        return None
     binary = shutil.which("dsh.exe")
-    if binary:
+    if binary and Path(binary).is_file():
         return [str(Path(binary).resolve())]
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+    local = local_appdata()
     shim = Path(shutil.which("dsh.cmd") or local / "dsh/bin/dsh.cmd")
     if shim.is_file():
         for value in re.findall(r'"([^"\r\n]+[/\\]apps[/\\]cli[/\\]lib[/\\]bin\.js)"',
                                 shim.read_text(encoding="utf-8", errors="replace")):
             script = Path(value)
             if script.is_absolute() and script.is_file():
-                return [node, str(script.resolve())]
-    roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+                command = _script_command(script)
+                if command:
+                    return command
     for package in ("@deepseek-ai/dsh", "@deepseek-ai/dsh-cli"):
-        root = roaming / "npm/node_modules" / package
-        if (root / "package.json").is_file():
-            metadata = json.loads((root / "package.json").read_text(encoding="utf-8"))
-            entry = metadata.get("bin", {})
-            entry = entry.get("dsh") if isinstance(entry, dict) else entry
-            if isinstance(entry, str) and (root / entry).is_file():
-                return [node, str((root / entry).resolve())]
+        for script in npm_entrypoints(package, "dsh", "lib/bin.js"):
+            command = _script_command(script)
+            if command:
+                return command
+    for item, path in _installed_paths(installations):
+        if path.name.casefold() == "dsh.exe":
+            return [str(path.resolve())]
+        if item.get("kind") == "entry":
+            command = _script_command(path)
+            if command:
+                return command
+        for relative in ("apps/cli/lib/bin.js", "resources/app/apps/cli/lib/bin.js"):
+            command = _script_command(path.parent / relative)
+            if command:
+                return command
     return None
 
 
-def zcode_command():
-    node = node_command()
-    if not node:
-        return None
-    candidates = []
+def zcode_command(installations=()):
+    candidates = [path.parent for _, path in _installed_paths(installations)]
     for row in registry_records():
         if not re.fullmatch(r"ZCode(?:\s+.*)?", row.get("DisplayName", ""), re.I):
             continue
-        if row.get("InstallLocation"):
-            candidates.append(Path(row["InstallLocation"]))
+        location = expanded_path(row.get("InstallLocation"))
+        if location:
+            candidates.append(location)
         for field in ("DisplayIcon", "UninstallString"):
             path = executable_path(row.get(field))
             if path:
                 candidates.append(path.parent)
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-    candidates += [local / "Programs/ZCode", local / "ZCode"]
-    for root in candidates:
+    candidates += [base / "ZCode" for base in installation_bases()]
+    for root in unique_paths(candidates):
         script = root / "resources/glm/zcode.cjs"
-        if script.is_file():
-            return [node, str(script.resolve())]
+        command = _script_command(script)
+        if command:
+            return command
     return None
 
 
@@ -143,8 +189,10 @@ def run_mode(agent, permission):
 
 
 class RunnerRegistry:
-    def __init__(self, codex_resolver, overrides=None):
+    def __init__(self, codex_resolver, overrides=None, *, installation_provider=None):
         self.model_catalog = ModelCatalog()
+        self.installation_provider = installation_provider
+        self.overridden = set(overrides or {})
         self.resolvers = {
             "codex": codex_resolver, "deepseek-harness": dsh_command, "zcode": zcode_command,
             "cursor": cursor_command,
@@ -156,7 +204,12 @@ class RunnerRegistry:
             raise ValueError("未绑定执行客户端；请在节点设置中选择可执行客户端，负责人和审核节点也需要绑定")
         if agent not in RUNNERS:
             raise ValueError(f"客户端“{agent}”目前仅支持装配，尚未接入自动执行；请在节点设置中选择可执行客户端")
-        return self.resolvers[agent]()
+        command = self.resolvers[agent]()
+        if command or not self.installation_provider or agent in self.overridden:
+            return command
+        resolver = {"codex": codex_command, "deepseek-harness": dsh_command,
+                    "cursor": cursor_command, "zcode": zcode_command}[agent]
+        return resolver(self.installation_provider(agent))
 
     def list(self):
         rows = []
@@ -287,9 +340,9 @@ def prepare_command(prefix, record, directory, environment):
         path = directory / "headless.patch.json"
         path.write_text(json.dumps(patch, ensure_ascii=False), encoding="utf-8")
         environment["DSH_PERMISSION_MODE"] = mode
-        bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
-        if bash.is_file():
-            environment.setdefault("SHELL", str(bash))
+        bash = git_bash_executable()
+        if bash and not environment.get("SHELL"):
+            environment["SHELL"] = bash
         return [*prefix, "--profile", "headless", "--patch", str(path), "--json", "-"]
     if agent == "cursor":
         command = [*prefix, "--print", "--output-format", "stream-json", "--workspace", record["cwd"]]

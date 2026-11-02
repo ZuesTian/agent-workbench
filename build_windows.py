@@ -136,6 +136,7 @@ for name in (
     "launcher.py", "build_windows.py", "README.md", "EXECUTION.md",
     "requirements.txt", "requirements-dev.txt", "package.json", "package-lock.json",
     "pytest.ini", ".gitignore", ".prettierrc.json", ".github/workflows/ci.yml",
+    "packaging/windows-installer.iss",
 ):
     manifest_files.append(root / name)
 source_rows = [

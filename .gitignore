@@ -10,5 +10,6 @@ node_modules/
 releases/
 audits/
 AgentWorkbench-*.zip
+AgentWorkbench-*-Setup.exe
 packaging/version-info.txt
 preview*.png

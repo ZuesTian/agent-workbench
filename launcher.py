@@ -16,13 +16,12 @@ from pathlib import Path
 from agent_workbench.storage import write_json
 from agent_workbench import __version__
 from agent_workbench.server import WorkbenchServer
+from agent_workbench.data_location import control_root
+from agent_workbench.locations import edge_executable
 
 
 def runtime_root():
-    return (
-        Path(os.getenv("LOCALAPPDATA", str(Path.home() / ".local/share")))
-        / "AgentWorkbench"
-    )
+    return control_root()
 
 
 @contextmanager
@@ -125,11 +124,8 @@ def serve(data):
 
 def open_window(info, browser=False):
     url = f"http://127.0.0.1:{info['port']}/#token={info['token']}"
-    edge = (
-        Path(os.getenv("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
-        / "Microsoft/Edge/Application/msedge.exe"
-    )
-    if edge.is_file() and not browser:
+    edge = edge_executable() if not browser else None
+    if edge:
         subprocess.Popen(
             [str(edge), "--app=" + url, "--window-size=1440,1000"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

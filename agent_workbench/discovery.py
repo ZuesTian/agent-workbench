@@ -11,12 +11,14 @@ from pathlib import Path
 
 import psutil
 
+from .locations import expanded_path, installation_bases, local_appdata, npm_entrypoints, npm_prefixes, unique_paths
+
 # A directory name alone is never installation evidence.
 PROGRAMS = {
     "codex": ("Codex", ("codex.exe",), ("Codex", "OpenAI/Codex")),
     "claude": ("Claude Code", ("claude.exe",), ("Claude Code",)),
     "claude-desktop": ("Claude", ("claude.exe",), ("Claude",)),
-    "cursor": ("Cursor", ("cursor.exe",), ("Cursor",)),
+    "cursor": ("Cursor", ("cursor.exe", "cursor-agent.exe"), ("Cursor",)),
     "trae": ("Trae(?:Code)?", ("trae.exe",), ("Trae",)),
     "trae-cn": ("Trae CN", ("trae cn.exe", "trae.exe"), ("Trae CN",)),
     "workbuddy": ("WorkBuddy", ("workbuddy.exe",), ("WorkBuddy",)),
@@ -30,7 +32,7 @@ PROGRAMS = {
     ),
     "deepseek-harness": (
         "DeepSeek Harness",
-        ("deepseek harness.exe",),
+        ("deepseek harness.exe", "dsh.exe"),
         ("DeepSeek Harness",),
     ),
     "zcode": ("ZCode", ("zcode.exe",), ("ZCode",)),
@@ -190,8 +192,11 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
             return
         records = found.setdefault(agent_id, [])
         canonical = str(path.resolve())
-        if any(x["path"].casefold() == canonical.casefold() for x in records):
-            return
+        for existing in records:
+            if existing["path"].casefold() == canonical.casefold():
+                if kind == "cli":
+                    existing["kind"] = kind
+                return
         records.append(
             {
                 "path": canonical,
@@ -219,8 +224,9 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
             _, names, _ = PROGRAMS[agent_id]
             directories = []
             location = record.get("InstallLocation")
-            if isinstance(location, str) and Path(location.strip('"')).is_absolute():
-                directories.append(Path(location.strip('"')))
+            location = expanded_path(location)
+            if location:
+                directories.append(location)
             for key in ("DisplayIcon", "UninstallString"):
                 path = executable_path(record.get(key))
                 if path:
@@ -235,8 +241,8 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
             agent_id = _path_agent(path)
             if agent_id:
                 add(agent_id, path, "运行中程序路径")
-        local = Path(os.getenv("LOCALAPPDATA", str(home / "AppData/Local")))
-        bases = [local / "Programs", local, home / ".local/bin"]
+        local = local_appdata(home)
+        bases = installation_bases(home)
         for drive in fixed_drives():
             bases.extend(
                 drive / name
@@ -249,31 +255,34 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
                     "Software",
                 )
             )
+        bases = list(unique_paths(bases))
         inspected = [str(p) for p in bases if p.is_dir()]
         for agent_id, (_, names, folders) in PROGRAMS.items():
             for name in names:
                 path = shutil.which(name)
                 if path:
-                    add(agent_id, Path(path), "PATH")
+                    add(agent_id, Path(path), "PATH", "cli" if name in {"codex.exe", "dsh.exe", "cursor-agent.exe"} else "executable")
                 for base in bases:
                     for folder in folders:
                         add(agent_id, base / folder / name, "常用安装目录")
         for path in (local / "OpenAI/Codex/bin").glob("*/codex.exe"):
-            add("codex", path, "Codex 安装目录")
+            add("codex", path, "Codex 安装目录", "cli")
         for path in (local / "AnthropicClaude").glob("*/claude.exe"):
             add("claude-desktop", path, "桌面程序目录")
-        for name, package, script in (
-            ("codex", "@openai/codex", "bin/codex.js"),
-            ("claude", "@anthropic-ai/claude-code", "cli.js"),
-            ("gemini", "@google/gemini-cli", "dist/index.js"),
-            ("opencode", "opencode-ai", "bin/opencode"),
+        prefixes = npm_prefixes(home, roaming)
+        for name, package, command, script in (
+            ("codex", "@openai/codex", "codex", "bin/codex.js"),
+            ("claude", "@anthropic-ai/claude-code", "claude", "cli.js"),
+            ("gemini", "@google/gemini-cli", "gemini", "dist/index.js"),
+            ("opencode", "opencode-ai", "opencode", "bin/opencode"),
+            ("deepseek-harness", "@deepseek-ai/dsh", "dsh", "lib/bin.js"),
+            ("deepseek-harness", "@deepseek-ai/dsh-cli", "dsh", "lib/bin.js"),
         ):
-            add(
-                name,
-                roaming / "npm/node_modules" / package / script,
-                "npm 启动入口",
-                "entry",
-            )
+            for path in npm_entrypoints(package, command, script, prefixes=prefixes):
+                add(name, path, "npm 启动入口", "entry")
+        for path in (local / "cursor-agent/versions").glob("*/index.js"):
+            if (path.parent / "node.exe").is_file() and re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}(?:-\d{2}-\d{2}-\d{2})?-[a-f0-9]+", path.parent.name):
+                add("cursor", path, "Cursor CLI 安装目录", "entry")
         add("claude", home / ".local/bin/claude.exe", "用户启动入口")
         for base in (home / ".vscode/extensions", home / ".cursor/extensions"):
             for agent_id, prefix in (
@@ -319,7 +328,10 @@ def probe_installations(home, roaming, extra_roots=(), *, system=True):
                             path = Path(entry.path)
                             agent_id = _path_agent(path)
                             if agent_id:
-                                add(agent_id, path, "自选程序目录")
+                                cli = path.name.casefold() in {"dsh.exe", "cursor-agent.exe"}
+                                if agent_id == "codex" and "/codex/bin/" in path.as_posix().casefold():
+                                    cli = True
+                                add(agent_id, path, "自选程序目录", "cli" if cli else "executable")
                         elif depth < 3 and entry.is_dir(follow_symlinks=False):
                             if (
                                 entry.name.casefold()

@@ -19,6 +19,7 @@ from .adapters import (
 from .discovery import probe_installations
 from .scan_cache import ParsedFiles, fingerprint, load_snapshot, save_snapshot
 from .storage import read_json, write_json, stamp
+from .locations import roaming_appdata
 
 
 def uid(*parts) -> str:
@@ -74,12 +75,14 @@ class Catalog:
             (home is None and roaming is None) if system_scan is None else system_scan
         )
         self.home = home or Path.home()
-        self.roaming = roaming or Path(os.getenv("APPDATA", str(self.home / ".config")))
+        self.roaming = roaming or roaming_appdata(self.home)
         from .data_location import control_root, data_root
         self.control = data or control_root(self.home)
         self.data = data or data_root(self.home)
         self.data.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self._installation_lock = threading.Lock()
+        self._installation_cache = None
         self.settings_path = self.data / "settings.json"
         self.settings_error = ""
         try:
@@ -136,8 +139,30 @@ class Catalog:
                 str(self.data),
                 self.system_scan,
                 self.settings,
+                self.path_environment(),
             ]
         )
+
+    def path_environment(self):
+        # Explicit test/import roots must never fall through to the host's config.
+        if not self.system_scan:
+            return {}
+        names = {"codex_home", "claude_config_dir", "xdg_config_home", "opencode_config", "opencode_config_dir"}
+        return {key: value for key, value in os.environ.items() if key.casefold() in names}
+
+    def discover_installations(self, *, refresh=False):
+        context = (tuple(self.settings["install_roots"]), self.system_scan)
+        with self._installation_lock:
+            if refresh or self._installation_cache is None or self._installation_cache[0] != context:
+                result = probe_installations(self.home, self.roaming, context[0], system=self.system_scan)
+                self._installation_cache = (context, result)
+            return self._installation_cache[1]
+
+    def execution_installations(self, agent_id):
+        # Only fresh filesystem discovery is shared with runners, never the disk
+        # display cache. Runners also recheck each entry immediately before use.
+        found, _ = self.discover_installations()
+        return list(found.get(agent_id, []))
 
     def save_settings(self):
         if self.settings_error:
@@ -271,19 +296,14 @@ class Catalog:
         self.skills, self.mcps, self.roles = {}, {}, {}
         self.agents = {
             a.id: a
-            for a in discover_agents(self.home, self.roaming, self.settings["agents"])
+            for a in discover_agents(self.home, self.roaming, self.settings["agents"], environment=self.path_environment())
         }
         issues, roots, public_agents = (
             ([self.settings_error] if self.settings_error else []),
             [],
             [],
         )
-        installations, discovery = probe_installations(
-            self.home,
-            self.roaming,
-            self.settings["install_roots"],
-            system=self.system_scan,
-        )
+        installations, discovery = self.discover_installations(refresh=True)
         issues.extend(discovery["issues"])
         for agent in self.agents.values():
             agent.installations.extend(installations.get(agent.id, []))

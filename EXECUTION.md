@@ -1,6 +1,6 @@
 # 执行任务与自动调度
 
-Agent 工坊 1.0.0 支持真实执行、自动调度、多 Agent 会话与 Windows 托盘，本机数据默认保存在 `%LOCALAPPDATA%\AgentWorkbench`，可在设置中校验迁移到空目录，资源发现、装配、备份和协作方案统一管理。
+Agent 工坊 1.0.1 支持真实执行、自动调度、多 Agent 会话与 Windows 托盘，本机数据默认保存在 `%LOCALAPPDATA%\AgentWorkbench`，可在设置中校验迁移到空目录，资源发现、装配、备份和协作方案统一管理。
 
 ## 单个任务
 

@@ -1,17 +1,17 @@
 """Verified data relocation; runtime discovery remains at a stable user location."""
 
 import hashlib
-import os
 import shutil
 import uuid
 from pathlib import Path
 
 from .storage import read_json, write_json, stamp
 from .validation import text
+from .locations import local_appdata
 
 
 def control_root(home=None):
-    return Path(os.getenv("LOCALAPPDATA", str((home or Path.home()) / ".local/share"))) / "AgentWorkbench"
+    return local_appdata(home) / "AgentWorkbench"
 
 
 def data_root(home=None):
